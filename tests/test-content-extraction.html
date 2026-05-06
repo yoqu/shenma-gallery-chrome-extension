@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>内容提取测试页面</title>
+  <style>
+    body { font-family: sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
+    .test-section { margin: 20px 0; padding: 20px; border: 1px solid #ddd; border-radius: 8px; }
+    .test-section h2 { color: #333; margin-bottom: 10px; }
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .card { border: 1px solid #eee; border-radius: 8px; overflow: hidden; }
+    .card img { width: 100%; height: 200px; object-fit: cover; }
+    .card .info { padding: 12px; }
+    .card .title { font-weight: bold; margin-bottom: 8px; }
+    .card .prompt { font-size: 12px; color: #666; }
+    .prompt-text { background: #f5f5f5; padding: 12px; border-radius: 4px; font-family: monospace; font-size: 13px; }
+    .results { margin-top: 20px; padding: 20px; background: #f0f8ff; border-radius: 8px; }
+    .results pre { white-space: pre-wrap; font-size: 12px; }
+    button { padding: 10px 20px; background: #667eea; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 14px; }
+    button:hover { opacity: 0.9; }
+    .status { margin: 10px 0; padding: 8px; border-radius: 4px; }
+    .status.pass { background: #d4edda; color: #155724; }
+    .status.fail { background: #f8d7da; color: #721c24; }
+  </style>
+</head>
+<body>
+  <h1>🧪 神马图鉴收集助手 - 内容提取测试</h1>
+  <p>此页面用于测试Chrome扩展的内容提取功能。</p>
+
+  <!-- Test 1: Basic image + prompt cards -->
+  <div class="test-section" id="test-basic">
+    <h2>测试1: 基本图片+提示词卡片</h2>
+    <div class="grid">
+      <article class="card">
+        <img src="https://picsum.photos/400/300?random=1" width="400" height="300" alt="Fantasy landscape">
+        <div class="info">
+          <div class="title">幻想风景画</div>
+          <div class="prompt">a beautiful fantasy landscape, crystal mountains, ethereal lighting, highly detailed, 8k, masterpiece, digital art, cinematic</div>
+        </div>
+      </article>
+      <article class="card">
+        <img src="https://picsum.photos/400/300?random=2" width="400" height="300" alt="Cyberpunk city">
+        <div class="info">
+          <div class="title">赛博朋克城市</div>
+          <div class="prompt">cyberpunk city at night, neon lights, rain, reflections, ultra realistic, depth of field, bokeh, cinematic lighting --ar 16:9 --v 5</div>
+        </div>
+      </article>
+      <article class="card">
+        <img src="https://picsum.photos/400/300?random=3" width="400" height="300" alt="Portrait">
+        <div class="info">
+          <div class="title">人像摄影</div>
+          <div class="prompt">portrait of a young woman, natural lighting, bokeh background, photography, best quality, highly detailed, sharp focus</div>
+        </div>
+      </article>
+    </div>
+  </div>
+
+  <!-- Test 2: Prompt-only content -->
+  <div class="test-section" id="test-prompts">
+    <h2>测试2: 纯提示词内容</h2>
+    <div class="prompt-text">
+      masterpiece, best quality, 1girl, long hair, white dress, garden, sunlight, flowers, highly detailed, ultra realistic, 8k resolution, cinematic composition
+    </div>
+    <br>
+    <pre class="prompt-text">Negative prompt: lowres, bad anatomy, bad hands, text, error, missing fingers, extra digit, fewer digits, cropped, worst quality, low quality</pre>
+  </div>
+
+  <!-- Test 3: Small/decorative images (should be filtered) -->
+  <div class="test-section" id="test-filter">
+    <h2>测试3: 应被过滤的小图/装饰图</h2>
+    <img src="https://picsum.photos/32/32" width="32" height="32" class="avatar" alt="avatar">
+    <img src="https://picsum.photos/16/16" width="16" height="16" class="icon" alt="icon">
+    <img src="https://picsum.photos/64/20" width="64" height="20" class="logo" alt="logo">
+  </div>
+
+  <!-- Test 4: Generation info format -->
+  <div class="test-section" id="test-generation">
+    <h2>测试4: 生成参数信息</h2>
+    <article class="card">
+      <img src="https://picsum.photos/400/400?random=4" width="400" height="400" alt="AI Art">
+      <div class="info">
+        <div class="title">AI艺术作品</div>
+        <div class="prompt">ethereal fairy in enchanted forest, magical particles, volumetric lighting, style of artgerm</div>
+        <div class="generation-info">
+          Model: Stable Diffusion XL | Steps: 30 | CFG Scale: 7.5 | Sampler: DPM++ 2M Karras | Seed: 1234567890
+        </div>
+      </div>
+    </article>
+  </div>
+
+  <!-- Test Runner -->
+  <div class="test-section">
+    <h2>运行测试</h2>
+    <button id="run-tests">运行提取测试</button>
+    <div id="test-results" class="results" style="display:none;">
+      <h3>测试结果:</h3>
+      <pre id="results-output"></pre>
+    </div>
+  </div>
+
+  <script>
+    // Simulate content script extraction logic for testing
+    document.getElementById('run-tests').addEventListener('click', () => {
+      const results = [];
+      let passed = 0;
+      let failed = 0;
+
+      // Test 1: Should find 3 cards with images and prompts
+      const cards = document.querySelectorAll('#test-basic .card');
+      const test1Items = [];
+      cards.forEach(card => {
+        const img = card.querySelector('img');
+        const prompt = card.querySelector('.prompt');
+        const title = card.querySelector('.title');
+        if (img && img.naturalWidth >= 200) {
+          test1Items.push({
+            imageUrl: img.src,
+            prompt: prompt?.textContent || '',
+            title: title?.textContent || ''
+          });
+        }
+      });
+
+      if (test1Items.length === 3) {
+        results.push('✅ 测试1通过: 找到3个图片+提示词卡片');
+        passed++;
+      } else {
+        results.push(`❌ 测试1失败: 期望3个项目，实际找到${test1Items.length}个`);
+        failed++;
+      }
+
+      // Test 2: Should find prompt text
+      const promptTexts = document.querySelectorAll('#test-prompts .prompt-text');
+      const promptContent = Array.from(promptTexts).map(el => el.textContent.trim());
+      const hasPromptKeywords = promptContent.some(t =>
+        t.includes('masterpiece') || t.includes('best quality')
+      );
+
+      if (hasPromptKeywords && promptContent.length >= 1) {
+        results.push('✅ 测试2通过: 成功识别提示词文本');
+        passed++;
+      } else {
+        results.push('❌ 测试2失败: 未能识别提示词文本');
+        failed++;
+      }
+
+      // Test 3: Small images should be filtered
+      const smallImgs = document.querySelectorAll('#test-filter img');
+      const filteredCount = Array.from(smallImgs).filter(img => {
+        const w = img.naturalWidth || parseInt(img.getAttribute('width')) || 0;
+        const h = img.naturalHeight || parseInt(img.getAttribute('height')) || 0;
+        return w < 200 || h < 200;
+      }).length;
+
+      if (filteredCount === 3) {
+        results.push('✅ 测试3通过: 正确过滤了3个小图/装饰图');
+        passed++;
+      } else {
+        results.push(`❌ 测试3失败: 期望过滤3个，实际过滤${filteredCount}个`);
+        failed++;
+      }
+
+      // Test 4: Generation info extraction
+      const genInfo = document.querySelector('#test-generation .generation-info');
+      const hasGenInfo = genInfo && genInfo.textContent.includes('Model') && genInfo.textContent.includes('Steps');
+
+      if (hasGenInfo) {
+        results.push('✅ 测试4通过: 成功识别生成参数信息');
+        passed++;
+      } else {
+        results.push('❌ 测试4失败: 未能识别生成参数信息');
+        failed++;
+      }
+
+      // Test 5: Prompt heuristic detection
+      const testPrompts = [
+        'a photo of a cat',  // should match
+        'masterpiece, best quality, highly detailed, 8k',  // should match
+        'Hello world this is normal text',  // should NOT match
+        'cyberpunk city, neon, cinematic lighting, bokeh',  // should match
+      ];
+
+      function looksLikePrompt(text) {
+        const promptIndicators = [
+          /\b(masterpiece|best quality|highly detailed|ultra realistic|8k|4k)\b/i,
+          /\b(negative prompt|steps|sampler|cfg scale|seed|model)\b/i,
+          /\b(lora|embedding|controlnet|checkpoint)\b/i,
+          /\b(portrait|landscape|anime|realistic|photography)\b/i,
+          /,\s*([\w\s]+,){2,}/,
+          /\b(style of|in the style|inspired by)\b/i,
+          /\b(cinematic|dramatic|lighting|bokeh|depth of field)\b/i,
+          /--\w+\s/,
+          /\b(a photo of|an illustration of|a painting of|digital art)\b/i
+        ];
+        let score = 0;
+        for (const pattern of promptIndicators) {
+          if (pattern.test(text)) score++;
+        }
+        return score >= 1;
+      }
+
+      const expected = [true, true, false, true];
+      const actual = testPrompts.map(looksLikePrompt);
+      const heuristicCorrect = expected.every((v, i) => v === actual[i]);
+
+      if (heuristicCorrect) {
+        results.push('✅ 测试5通过: 提示词启发式检测正确');
+        passed++;
+      } else {
+        results.push(`❌ 测试5失败: 启发式检测结果 [${actual}] 不匹配期望 [${expected}]`);
+        failed++;
+      }
+
+      // Display results
+      const output = document.getElementById('results-output');
+      const container = document.getElementById('test-results');
+      container.style.display = 'block';
+      output.textContent = results.join('\n') + `\n\n总计: ${passed} 通过, ${failed} 失败`;
+    });
+  </script>
+</body>
+</html>

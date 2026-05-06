@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>神马图鉴收集助手</title>
+  <link rel="stylesheet" href="sidepanel.css">
+</head>
+<body>
+  <div class="app">
+    <!-- ═══ Header ═══ -->
+    <header class="app-header">
+      <div class="brand">
+        <span class="brand-icon" aria-hidden="true">
+          <svg viewBox="0 0 64 64" width="20" height="20" xmlns="http://www.w3.org/2000/svg">
+            <g fill="#ffffff">
+              <rect x="12" y="8" width="36" height="5" rx="1.5"/>
+              <path d="M44 4 52 12 46 14 42 10Z"/>
+              <rect x="14" y="11" width="5" height="22" rx="1.5"/>
+              <rect x="14" y="22" width="34" height="5" rx="1.5"/>
+              <rect x="43" y="11" width="5" height="22" rx="1.5"/>
+              <path d="M8 36h48l2 5-4 2-2 13-6 2V44H10l-2-4Z"/>
+              <circle cx="16" cy="52" r="2.5"/>
+              <circle cx="26" cy="54" r="2.5"/>
+              <circle cx="36" cy="54" r="2.5"/>
+            </g>
+          </svg>
+        </span>
+        <span class="brand-name">神马图鉴收集助手</span>
+      </div>
+      <button id="btn-settings" class="icon-btn" title="设置">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+        </svg>
+      </button>
+    </header>
+
+    <!-- ═══ Status bar ═══ -->
+    <div class="status-bar">
+      <span id="connection-status" class="status-dot disconnected"></span>
+      <span id="status-text">未连接</span>
+      <span class="status-spacer"></span>
+      <button id="btn-login" class="btn btn-sm btn-pink" title="打开网站登录">登录</button>
+      <button id="btn-fetch-token" class="btn btn-sm btn-pink hidden" title="从网站获取token">获取授权</button>
+      <button id="btn-logout" class="btn btn-sm btn-ghost hidden" title="退出">退出</button>
+    </div>
+
+    <!-- ═══ Main: stage with step views ═══ -->
+    <main class="stage">
+      <!-- Step: idle -->
+      <section class="step step-idle active" data-step="idle">
+        <div class="card">
+          <h3 class="card-title">
+            <span class="card-icon pink">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>
+            </span>
+            开始收集
+          </h3>
+          <p class="card-hint">在当前页面上选择包含 AI 图片和提示词的区域，AI 会自动识别整理。</p>
+          <button id="btn-pick" class="btn btn-primary btn-block">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:6px;"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/><path d="M13 13l6 6"/></svg>
+            选择页面区域
+          </button>
+        </div>
+
+        <div class="card tips">
+          <h3 class="card-title">
+            <span class="card-icon cyan">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>
+            </span>
+            使用提示
+          </h3>
+          <ul>
+            <li>点击按钮后，在页面上移动鼠标高亮元素</li>
+            <li>滚轮上下切换父级 / 子级</li>
+            <li>点击确认选择，AI 自动整理</li>
+            <li>侧边栏全程指挥，无需再回到页面</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- Step: picking -->
+      <section class="step step-picking" data-step="picking">
+        <div class="card">
+          <div class="picking-anim">
+            <div class="picking-pulse"></div>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l7.07 16.97 2.51-7.39 7.39-2.51L3 3z"/></svg>
+          </div>
+          <div class="picking-title">在页面上选择内容区域</div>
+          <div class="picking-hint">鼠标移动高亮元素 · 滚轮切层级 · 点击确认 · ESC 取消</div>
+          <button id="btn-cancel-pick" class="btn btn-ghost btn-block">取消选择</button>
+        </div>
+      </section>
+
+      <!-- Step: ai analysis -->
+      <section class="step step-ai" data-step="ai">
+        <div class="card">
+          <h3 class="card-title">AI 分析中</h3>
+          <div id="ai-status" class="ai-status">正在准备…</div>
+          <div class="progress-track"><div class="progress-bar"></div></div>
+        </div>
+      </section>
+
+      <!-- Step: results -->
+      <section class="step step-results" data-step="results">
+        <div class="card pool-card">
+          <div class="pool-title">候选图片（拖到右侧条目可替换）</div>
+          <div id="img-pool-list" class="pool-list"></div>
+        </div>
+
+        <div class="results-meta">
+          <span id="results-count" class="results-count">0 个作品</span>
+          <button id="btn-select-all" class="btn btn-sm btn-ghost">全选</button>
+        </div>
+
+        <div id="results-list" class="results-list"></div>
+
+        <div class="actions-row">
+          <button id="btn-repick" class="btn btn-secondary">重新选择</button>
+          <button id="btn-submit" class="btn btn-primary btn-flex">提交到趣神马</button>
+        </div>
+      </section>
+
+      <!-- Step: submit log -->
+      <section class="step step-submit" data-step="submit">
+        <div class="card">
+          <h3 class="card-title">提交进度</h3>
+          <div id="submit-log" class="submit-log"></div>
+          <div class="actions-row" style="margin-top:12px;">
+            <button id="btn-submit-back" class="btn btn-secondary btn-block">完成 / 返回</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- ═══ Settings drawer (covers app) ═══ -->
+  <div id="settings-drawer" class="drawer">
+    <div class="drawer-header">
+      <span class="drawer-title">设置</span>
+      <button id="btn-back" class="icon-btn" title="返回">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="drawer-body">
+      <div class="card">
+        <h3 class="card-title">
+          <span class="card-icon cyan">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          </span>
+          趣神马网站
+        </h3>
+        <div class="form-group">
+          <label>网站域名</label>
+          <input type="text" id="site-domain" placeholder="www.qushenma.com" value="www.qushenma.com">
+        </div>
+        <div class="form-group">
+          <label>认证 Token</label>
+          <input type="password" id="site-token" placeholder="通过登录自动获取">
+        </div>
+      </div>
+
+      <div class="card">
+        <h3 class="card-title">
+          <span class="card-icon amber">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/></svg>
+          </span>
+          AI 大模型（必填）
+        </h3>
+        <div class="form-group">
+          <label>服务商预设</label>
+          <select id="llm-provider" class="form-select">
+            <option value="">— 选择以快速填充 —</option>
+          </select>
+          <p class="form-hint">选择后会自动填入 Base URL 与候选模型，仍可手动修改</p>
+        </div>
+        <div class="form-group">
+          <label>API Base URL</label>
+          <input type="text" id="llm-base-url" placeholder="https://api.openai.com/v1" list="llm-base-url-options">
+          <datalist id="llm-base-url-options"></datalist>
+        </div>
+        <div class="form-group">
+          <label>API Key</label>
+          <input type="password" id="llm-api-key" placeholder="sk-...">
+          <p id="llm-api-key-hint" class="form-hint hidden"></p>
+        </div>
+        <div class="form-group">
+          <label>模型名称</label>
+          <input type="text" id="llm-model" placeholder="gpt-4o-mini" list="llm-model-options">
+          <datalist id="llm-model-options"></datalist>
+        </div>
+      </div>
+
+      <div class="actions-row">
+        <button id="btn-save-settings" class="btn btn-primary btn-flex">保存</button>
+        <button id="btn-test-connection" class="btn btn-secondary">测试连接</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Edit modal (slide-up sheet over sidebar) ═══ -->
+  <div id="edit-modal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <span class="modal-title">编辑作品</span>
+        <button class="modal-close icon-btn" title="关闭 (ESC)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>图片预览</label>
+          <div class="edit-img-preview" title="点击放大">
+            <img class="edit-preview-img" alt="无图片">
+            <div class="edit-preview-empty">无图片</div>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>图片 URL</label>
+          <input type="text" data-field="imageUrl" placeholder="https://...">
+        </div>
+        <div class="form-group">
+          <label>标题</label>
+          <input type="text" data-field="title" placeholder="作品标题">
+        </div>
+        <div class="form-group">
+          <label>正向提示词 (Prompt)</label>
+          <textarea data-field="prompt" rows="5" placeholder="正向提示词"></textarea>
+        </div>
+        <div class="form-group">
+          <label>负面提示词 (Negative Prompt)</label>
+          <textarea data-field="negativePrompt" rows="3" placeholder="负面提示词（可选）"></textarea>
+        </div>
+        <div class="form-group">
+          <label>模型</label>
+          <input type="text" data-field="model" list="shenma-model-options" placeholder="选择或输入模型" autocomplete="off">
+          <datalist id="shenma-model-options">
+            <option value="gpt-image-2"></option>
+            <option value="gpt-image-1"></option>
+            <option value="Midjourney v7"></option>
+            <option value="Midjourney v6"></option>
+            <option value="Niji Journey v6"></option>
+            <option value="Flux.1 [pro]"></option>
+            <option value="Flux.1 [dev]"></option>
+            <option value="Flux.1 [schnell]"></option>
+            <option value="Stable Diffusion 3.5"></option>
+            <option value="Stable Diffusion XL"></option>
+            <option value="Stable Diffusion 1.5"></option>
+            <option value="DALL-E 3"></option>
+            <option value="Imagen 3"></option>
+            <option value="Recraft V3"></option>
+            <option value="Ideogram 2.0"></option>
+            <option value="NovelAI Diffusion 3"></option>
+            <option value="即梦 (Jimeng)"></option>
+            <option value="可灵 (Kling)"></option>
+            <option value="海螺 (MiniMax)"></option>
+            <option value="通义万相"></option>
+            <option value="文心一格"></option>
+            <option value="Seedream"></option>
+            <option value="ComfyUI 工作流"></option>
+          </datalist>
+        </div>
+        <div class="form-group">
+          <label>标签 (逗号分隔)</label>
+          <input type="text" data-field="tags" placeholder="风景, 写实, 黄昏">
+        </div>
+        <div class="form-group">
+          <label>描述</label>
+          <textarea data-field="summary" rows="2" placeholder="一句话描述"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-action="cancel">取消</button>
+        <button class="btn btn-primary btn-flex" data-action="save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Lightbox (image preview, fills sidebar) ═══ -->
+  <div id="lightbox" class="lightbox">
+    <div class="lightbox-backdrop"></div>
+    <div class="lightbox-content">
+      <button class="lightbox-close icon-btn" title="关闭 (ESC)">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+      <img class="lightbox-img" alt="">
+      <a class="lightbox-open" target="_blank" rel="noopener" title="在新标签页打开">原图链接 ↗</a>
+    </div>
+  </div>
+
+  <script src="providers.js"></script>
+  <script src="sidepanel.js"></script>
+</body>
+</html>
