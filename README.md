@@ -78,6 +78,7 @@ npm run screenshots
 ```
 
 扩展没有构建步骤。修改源码后，在 `chrome://extensions/` 中点击扩展卡片的刷新按钮即可。
+如果当前机器没有可被 Playwright 调用的 Chrome，生成截图前先运行 `npx playwright install chromium`。
 
 ## 目录结构
 

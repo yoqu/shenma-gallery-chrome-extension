@@ -65,3 +65,4 @@ npm run screenshots
 ```
 
 扩展没有打包步骤，修改源码后在 `chrome://extensions/` 点击刷新扩展即可。
+如果截图脚本提示找不到浏览器，先运行 `npx playwright install chromium`。
