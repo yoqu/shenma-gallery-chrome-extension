@@ -27,6 +27,12 @@ const poolList = document.getElementById('img-pool-list');
 const resultsList = document.getElementById('results-list');
 const resultsCount = document.getElementById('results-count');
 const submitLogEl = document.getElementById('submit-log');
+const submitCardsEl = document.getElementById('submit-cards');
+const submitFinalEl = document.getElementById('submit-final');
+const submitCountCurrentEl = document.getElementById('submit-count-current');
+const submitCountTotalEl = document.getElementById('submit-count-total');
+const submitProgressLineEl = document.getElementById('submit-progress-line');
+const submitProgressLineFillEl = document.getElementById('submit-progress-line-fill');
 const debugLogEl = document.getElementById('debug-log');
 
 const siteDomain = document.getElementById('site-domain');
@@ -38,6 +44,7 @@ const llmApiKey = document.getElementById('llm-api-key');
 const llmApiKeyHint = document.getElementById('llm-api-key-hint');
 const llmModel = document.getElementById('llm-model');
 const llmModelOptions = document.getElementById('llm-model-options');
+const llmThinking = document.getElementById('llm-thinking');
 
 const editModal = document.getElementById('edit-modal');
 const lightbox = document.getElementById('lightbox');
@@ -56,13 +63,52 @@ document.addEventListener('DOMContentLoaded', async () => {
   await loadSettings();
   await checkConnection();
   showStep('idle');
+  refreshSiteAdapterBanner();
 });
+
+// Track current active tab so the site-adapter banner stays accurate as the
+// user switches/navigates tabs while the side panel is open.
+chrome.tabs?.onActivated?.addListener(() => refreshSiteAdapterBanner());
+chrome.tabs?.onUpdated?.addListener((_id, info) => {
+  if (info.url || info.status === 'complete') refreshSiteAdapterBanner();
+});
+
+async function refreshSiteAdapterBanner() {
+  const banner = document.getElementById('site-adapter-banner');
+  if (!banner) return;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = tab?.url || '';
+    const adapter = url ? window.ShenmaSiteAdapters?.adapterFor(url) : null;
+    if (!adapter) {
+      banner.classList.add('hidden');
+      return;
+    }
+    const iconEl = banner.querySelector('[data-site-icon]');
+    const nameEl = banner.querySelector('[data-site-name]');
+    const tagEl  = banner.querySelector('[data-site-tagline]');
+    if (iconEl) iconEl.innerHTML = adapter.banner?.iconSvg || '';
+    if (nameEl) nameEl.textContent = adapter.banner?.name || adapter.id;
+    if (tagEl)  tagEl.textContent = adapter.banner?.tagline || '';
+    banner.classList.remove('hidden');
+  } catch {
+    banner.classList.add('hidden');
+  }
+}
 
 // React to settings changing in another window/instance.
 chrome.storage.onChanged?.addListener((changes, area) => {
   if (area !== 'local') return;
   // Only re-pull what's relevant.
-  if (changes.siteToken || changes.siteDomain) {
+  if (
+    changes.siteToken ||
+    changes.siteDomain ||
+    changes.llmProvider ||
+    changes.llmBaseUrl ||
+    changes.llmApiKey ||
+    changes.llmModel ||
+    changes.llmThinkingEnabled
+  ) {
     loadSettings().then(() => checkConnection());
   }
 });
@@ -189,6 +235,26 @@ function setKeyHint(provider) {
   }
 }
 
+function isDeepSeekProvider(providerId, baseUrl = '') {
+  if (String(providerId || '').toLowerCase() === 'deepseek') return true;
+  const normalized = String(baseUrl || '').toLowerCase();
+  if (!normalized) return false;
+  try {
+    return new URL(normalized).hostname.includes('deepseek');
+  } catch {
+    return normalized.includes('deepseek');
+  }
+}
+
+function buildThinkingConfig(llm) {
+  if (!isDeepSeekProvider(llm?.llmProvider, llm?.llmBaseUrl)) return null;
+  return {
+    thinking: {
+      type: llm?.llmThinkingEnabled ? 'enabled' : 'disabled',
+    },
+  };
+}
+
 // force=true overwrites existing fields (user picked from dropdown);
 // force=false only fills empty fields (called when restoring saved settings).
 function applyProviderPreset(providerId, { force = false } = {}) {
@@ -207,7 +273,7 @@ function applyProviderPreset(providerId, { force = false } = {}) {
 // ============ Settings persistence ============
 async function loadSettings() {
   const s = await chrome.storage.local.get([
-    'siteDomain', 'siteToken', 'llmProvider', 'llmBaseUrl', 'llmApiKey', 'llmModel',
+    'siteDomain', 'siteToken', 'llmProvider', 'llmBaseUrl', 'llmApiKey', 'llmModel', 'llmThinkingEnabled',
   ]);
   settings = s;
   siteDomain.value = s.siteDomain || 'www.qushenma.com';
@@ -215,6 +281,7 @@ async function loadSettings() {
   llmBaseUrl.value = s.llmBaseUrl || '';
   llmApiKey.value = s.llmApiKey || '';
   llmModel.value = s.llmModel || '';
+  if (llmThinking) llmThinking.checked = Boolean(s.llmThinkingEnabled);
 
   const resolvedId = s.llmProvider || inferProviderId(llmBaseUrl.value);
   if (resolvedId && llmProvider) {
@@ -231,6 +298,7 @@ btnSaveSettings.addEventListener('click', async () => {
     llmBaseUrl: llmBaseUrl.value.trim(),
     llmApiKey: llmApiKey.value.trim(),
     llmModel: llmModel.value.trim(),
+    llmThinkingEnabled: Boolean(llmThinking && llmThinking.checked),
   });
   await loadSettings();
   showToast('设置已保存', 'success');
@@ -405,15 +473,32 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
 // ============ AI analysis ============
 async function handlePickedElement(payload) {
-  const html = String(payload.html || '').slice(0, 50000);
-  const text = String(payload.text || '').slice(0, 10000);
-  candidateImages = Array.isArray(payload.candidateImages) ? payload.candidateImages : [];
+  const rawHtmlOriginal = String(payload.html || '').slice(0, 50000);
+  const rawText = String(payload.text || '').slice(0, 10000);
+  const rawCandidates = Array.isArray(payload.candidateImages) ? payload.candidateImages : [];
   const pickDebug = payload.debug || null;
   const pageInfo = pickDebug?.page || {};
 
+  // Site-specific tweaks: rewrite img URLs to high-res variants before they
+  // ever reach the AI or get rendered (e.g. pbs.twimg.com ?name=small → orig).
+  const adapter = window.ShenmaSiteAdapters?.adapterFor(pageInfo) || null;
+  const rawHtml = adapter ? adapter.rewriteImagesInHtml(rawHtmlOriginal) : rawHtmlOriginal;
+  candidateImages = adapter
+    ? rawCandidates.map((url) => adapter.upgradeImageUrl(url))
+    : rawCandidates;
+  if (adapter) {
+    const upgradedCount = rawCandidates.reduce((acc, url, i) => acc + (candidateImages[i] !== url ? 1 : 0), 0);
+    debugLog('站点适配器已应用', {
+      adapter: adapter.id,
+      upgradedCandidates: upgradedCount,
+      sampleBefore: rawCandidates[0] || '',
+      sampleAfter: candidateImages[0] || '',
+    }, 'success');
+  }
+
   debugLog('收到选区', {
-    htmlLength: html.length,
-    textLength: text.length,
+    rawHtmlLength: rawHtml.length,
+    rawTextLength: rawText.length,
     candidateImages: candidateImages.length,
     page: pageInfo,
     selection: pickDebug ? {
@@ -424,10 +509,32 @@ async function handlePickedElement(payload) {
     } : null,
   });
 
+  const preprocessor = window.ShenmaHtmlPreprocessor;
+  const preprocessed = preprocessor?.preprocessSelectionForAi
+    ? preprocessor.preprocessSelectionForAi(rawHtml, rawText, {
+      maxHtmlChars: 12000,
+      maxTextChars: 6000,
+    })
+    : {
+      html: rawHtml.slice(0, 12000),
+      text: rawText,
+      stats: {
+        rawHtmlLength: rawHtml.length,
+        simplifiedHtmlLength: rawHtml.length,
+        rawTextLength: rawText.length,
+        compactTextLength: rawText.length,
+        htmlReduction: 0,
+      },
+    };
+
+  const html = preprocessed.html || rawHtml.slice(0, 12000);
+  const text = preprocessed.text || rawText;
+  debugLog('HTML 预处理完成', preprocessed.stats, 'info');
+
   showStep('ai');
   setAIStatus('正在准备发送给 AI…');
 
-  const llm = await chrome.storage.local.get(['llmBaseUrl', 'llmApiKey', 'llmModel']);
+  const llm = await chrome.storage.local.get(['llmProvider', 'llmBaseUrl', 'llmApiKey', 'llmModel', 'llmThinkingEnabled']);
   if (!llm.llmBaseUrl || !llm.llmApiKey || !llm.llmModel) {
     setAIStatus('请先在设置中配置 AI 大模型 (Base URL / API Key / 模型)');
     setTimeout(() => showStep('idle'), 2400);
@@ -449,10 +556,14 @@ async function handlePickedElement(payload) {
       baseUrl: llm.llmBaseUrl,
       model: llm.llmModel,
       htmlLength: html.length,
+      rawHtmlLength: rawHtml.length,
       textLength: text.length,
       candidateImages: candidateImages.length,
     });
-    const items = await callAI(html, text, llm);
+    const items = await callAI(html, text, llm, {
+      pageInfo,
+      pickDebug,
+    });
     if (items && items.length > 0) {
       debugLog('AI 识别成功', {
         items: items.length,
@@ -461,6 +572,7 @@ async function handlePickedElement(payload) {
       items.forEach((item, idx) => {
         if (!item.model || !String(item.model).trim()) item.model = 'gpt-image-2';
         if (!item.title || !String(item.title).trim()) item.title = deriveTitle(item, idx);
+        if (adapter && item.imageUrl) item.imageUrl = adapter.upgradeImageUrl(item.imageUrl);
       });
       organizedItems = items;
       renderResults(items);
@@ -470,13 +582,13 @@ async function handlePickedElement(payload) {
         htmlLength: html.length,
         textLength: text.length,
         candidateImages: candidateImages.length,
-      selection: pickDebug ? {
-        node: pickDebug.node || null,
-        picked: pickDebug.picked || null,
-        ancestor: pickDebug.ancestor || null,
-        signal: pickDebug.signal || null,
-      } : null,
-    }, 'warn');
+        selection: pickDebug ? {
+          node: pickDebug.node || null,
+          picked: pickDebug.picked || null,
+          ancestor: pickDebug.ancestor || null,
+          signal: pickDebug.signal || null,
+        } : null,
+      }, 'warn');
       setAIStatus('AI 未识别出作品，请尝试选择其它区域');
       setTimeout(() => showStep('idle'), 2400);
     }
@@ -494,7 +606,8 @@ async function callAI(html, text, llm, context = {}) {
   const selectionDebug = context.pickDebug || null;
   const host = String(pageInfo.hostname || '').toLowerCase();
   const isTweetPage = host.endsWith('x.com') || host.endsWith('twitter.com');
-  const systemPrompt = `你是 AI 艺术内容搬运助手。从用户选中的网页 HTML 中按**原文**提取每个图片及其元信息。
+  const systemPrompt = `你是 AI 艺术内容搬运助手。从用户选中的网页结构摘要中按**原文**提取每个图片及其元信息。
+输入已经先做过 HTML 预处理，标签和属性可能被弱化，请优先依赖剩余文本、图片 URL、role / data-testid / aria-label 等语义信号。
 
 【最重要的规则——违反即视为失败】
 - 全程**禁止翻译、禁止改写、禁止改变意思、禁止润色、禁止补充原文没有的内容**
@@ -529,7 +642,7 @@ async function callAI(html, text, llm, context = {}) {
 - 使用 tweet 正文作为 prompt / summary，使用候选图片 URL 作为 imageUrl。
 - 即使看不出图片细节，只要推文正文和候选图片 URL 明确，也不要直接返回 []。` : ''}`;
 
-  let userMsg = `## 选中区域HTML\n\`\`\`html\n${html.substring(0, 15000)}\n\`\`\`\n`;
+  let userMsg = `## 预处理后的结构摘要\n\`\`\`html\n${html.substring(0, 12000)}\n\`\`\`\n`;
   if (text) userMsg += `\n## 纯文本\n${text.substring(0, 5000)}\n`;
   if (pageInfo && Object.keys(pageInfo).length > 0) {
     userMsg += `\n## 页面信息\n\`\`\`json\n${JSON.stringify(pageInfo, null, 2)}\n\`\`\`\n`;
@@ -567,6 +680,7 @@ async function callAI(html, text, llm, context = {}) {
       ],
       temperature: 0.1,
       max_tokens: 4000,
+      ...(buildThinkingConfig(llm) || {}),
     }),
   });
 
@@ -868,6 +982,158 @@ document.addEventListener('keydown', (e) => {
 btnSubmit.addEventListener('click', submitSelected);
 btnSubmitBack.addEventListener('click', () => showStep('idle'));
 
+// ─── Submit progress (single-line, minimal) ───
+const PENDING_INDICATOR = '<span class="submit-card-indicator" aria-hidden="true"></span>';
+const RUNNING_INDICATOR = '<span class="submit-card-indicator" aria-hidden="true"></span>';
+const DONE_INDICATOR = `
+  <span class="submit-card-indicator" aria-hidden="true">
+    <svg viewBox="0 0 24 24"><polyline class="submit-card-check" points="5 12.5 10 17.5 19 7.5"/></svg>
+  </span>`;
+const ERROR_INDICATOR = `
+  <span class="submit-card-indicator" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round">
+      <line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/>
+    </svg>
+  </span>`;
+
+// Resolve possibly-relative asset URL against the qushenma site origin.
+// Local storage backend returns paths like "/uploads/abc.jpg"; the side panel
+// runs at chrome-extension://… so relative paths must be re-rooted on the site.
+function resolveAssetUrl(url, baseUrl) {
+  if (!url) return '';
+  if (/^(?:https?:|data:|blob:)/i.test(url)) return url;
+  if (url.startsWith('//')) return 'https:' + url;
+  if (url.startsWith('/')) return baseUrl + url;
+  return baseUrl + '/' + url;
+}
+
+function buildSubmitCard(index, item, total) {
+  const card = document.createElement('div');
+  card.className = 'submit-card is-pending';
+  card.dataset.index = String(index);
+
+  const safeTitle = esc(item.title || `收集作品 ${index + 1}`);
+  const thumb = item.imageUrl
+    ? `<img src="${escapeAttr(item.imageUrl)}" alt="" referrerpolicy="no-referrer" onerror="this.parentElement.innerHTML='<span class=\\'submit-card-thumb-empty\\'>无图</span>'">`
+    : `<span class="submit-card-thumb-empty">无图</span>`;
+
+  card.innerHTML = `
+    <div class="submit-card-head">
+      <div class="submit-card-thumb">${thumb}</div>
+      <div class="submit-card-info">
+        <div class="submit-card-title">${safeTitle}</div>
+        <div class="submit-card-sub" data-sub>等待中</div>
+      </div>
+      ${PENDING_INDICATOR}
+    </div>
+    <div class="submit-card-result-slot"></div>
+    <div class="submit-card-error-slot"></div>
+  `;
+  submitCardsEl.appendChild(card);
+  return card;
+}
+
+function setCardState(card, kind /* pending|running|done|error */, subText) {
+  if (!card) return;
+  card.classList.remove('is-pending', 'is-running', 'is-done', 'is-error');
+  card.classList.add(`is-${kind}`);
+  if (subText !== undefined) {
+    const sub = card.querySelector('[data-sub]');
+    if (sub) sub.textContent = subText;
+  }
+  const indicator = card.querySelector('.submit-card-indicator');
+  if (indicator) {
+    const html = kind === 'done' ? DONE_INDICATOR
+      : kind === 'error' ? ERROR_INDICATOR
+      : kind === 'running' ? RUNNING_INDICATOR
+      : PENDING_INDICATOR;
+    indicator.outerHTML = html;
+  }
+}
+
+function setCardError(card, message) {
+  if (!card) return;
+  const slot = card.querySelector('.submit-card-error-slot');
+  if (!slot) return;
+  slot.innerHTML = `<div class="submit-card-error">${esc(message)}</div>`;
+}
+
+function setCardResult(card, work, baseUrl) {
+  if (!card || !work) return;
+  const slot = card.querySelector('.submit-card-result-slot');
+  if (!slot) return;
+  const cover = resolveAssetUrl(work?.coverAsset?.url, baseUrl);
+  const tags = Array.isArray(work?.tags) ? work.tags.slice(0, 4) : [];
+  const detailUrl = `${baseUrl}/works/${work.id}`;
+  const tagsHtml = tags.map(t => `<span class="submit-card-result-tag">${esc(t.name || t.slug || '')}</span>`).join('');
+  slot.innerHTML = `
+    <div class="submit-card-result">
+      <div class="submit-card-result-cover">
+        ${cover ? `<img src="${escapeAttr(cover)}" alt="" referrerpolicy="no-referrer">` : ''}
+      </div>
+      <div class="submit-card-result-meta">
+        <div class="submit-card-result-title">${esc(work.title || '未命名')}</div>
+        ${tagsHtml ? `<div class="submit-card-result-tags">${tagsHtml}</div>` : ''}
+        <div class="submit-card-result-actions">
+          <a class="submit-card-result-link" href="${escapeAttr(detailUrl)}" data-open-tab="${escapeAttr(detailUrl)}">
+            查看作品
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M7 17L17 7"/>
+              <path d="M8 7h9v9"/>
+            </svg>
+          </a>
+        </div>
+      </div>
+    </div>`;
+}
+
+function updateProgress(done, total) {
+  const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+  if (submitCountCurrentEl) submitCountCurrentEl.textContent = String(done);
+  if (submitCountTotalEl) submitCountTotalEl.textContent = String(total);
+  if (submitProgressLineFillEl) submitProgressLineFillEl.style.width = `${pct}%`;
+}
+
+function setProgressActive(active) {
+  if (!submitProgressLineEl) return;
+  submitProgressLineEl.classList.toggle('is-active', !!active);
+}
+
+function showSubmitFinal(success, total) {
+  if (!submitFinalEl) return;
+  const fail = total - success;
+  const isAllOk = fail === 0 && total > 0;
+  submitFinalEl.classList.remove('hidden', 'has-fail');
+  if (!isAllOk) submitFinalEl.classList.add('has-fail');
+  const iconHtml = isAllOk
+    ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg>`
+    : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+  submitFinalEl.innerHTML = `
+    <div class="submit-final-icon">${iconHtml}</div>
+    <div class="submit-final-text">
+      ${isAllOk ? '全部提交成功' : `完成：${success} 成功 · ${fail} 失败`}
+      <small>共 ${total} 个作品</small>
+    </div>`;
+}
+
+function openWorkInTab(url) {
+  if (!url) return;
+  if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.create) {
+    chrome.tabs.create({ url });
+  } else {
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
+}
+
+if (submitCardsEl) {
+  submitCardsEl.addEventListener('click', (e) => {
+    const link = e.target.closest('[data-open-tab]');
+    if (!link) return;
+    e.preventDefault();
+    openWorkInTab(link.getAttribute('data-open-tab'));
+  });
+}
+
 async function submitSelected() {
   const cbs = resultsList.querySelectorAll('input:checked');
   const indices = Array.from(cbs).map(cb => parseInt(cb.dataset.index));
@@ -885,11 +1151,19 @@ async function submitSelected() {
   const selected = indices.map(i => organizedItems[i]);
   showStep('submit');
   submitLogEl.innerHTML = '';
+  submitCardsEl.innerHTML = '';
+  submitFinalEl.classList.add('hidden');
+  submitFinalEl.innerHTML = '';
 
   const domain = s.siteDomain || 'www.qushenma.com';
   const protocol = domain.includes('localhost') ? 'http' : 'https';
   const baseUrl = `${protocol}://${domain}`;
   let successCount = 0;
+
+  // Pre-build a card per item so progress is visible from the start
+  const cards = selected.map((item, i) => buildSubmitCard(i, item, selected.length));
+  updateProgress(0, selected.length);
+  setProgressActive(true);
 
   function log(text, type = 'info') {
     const div = document.createElement('div');
@@ -928,20 +1202,34 @@ async function submitSelected() {
   try {
     log('获取用户信息…');
     const meResult = await apiCall(`${baseUrl}/api/auth/me`);
-    if (!meResult.success) { log(`请求失败: ${meResult.error}`, 'error'); return; }
+    if (!meResult.success) { log(`请求失败: ${meResult.error}`, 'error'); setProgressActive(false); return; }
     const meData = meResult.data;
-    if (!meData.success) { log(`认证失败: ${meData.message}`, 'error'); return; }
+    if (!meData.success) { log(`认证失败: ${meData.message}`, 'error'); setProgressActive(false); return; }
     const authorId = meData.data.id;
     log(`用户: ${meData.data.nickname || meData.data.username}`, 'success');
 
     for (let i = 0; i < selected.length; i++) {
       const item = selected[i];
+      const card = cards[i];
       log(`\n[${i + 1}/${selected.length}] 处理: ${item.title || '未命名'}…`);
-      if (!item.imageUrl) { log('  无图片，跳过', 'error'); continue; }
 
+      if (!item.imageUrl) {
+        setCardState(card, 'error', '缺少图片，已跳过');
+        setCardError(card, '该条目缺少图片，已跳过');
+        log('  无图片，跳过', 'error');
+        continue;
+      }
+
+      // Upload
+      setCardState(card, 'running', '上传图片…');
       log('  上传图片…');
       const upResult = await uploadImage(item.imageUrl);
-      if (!upResult.success) { log(`  上传失败: ${upResult.error}`, 'error'); continue; }
+      if (!upResult.success) {
+        setCardState(card, 'error', '上传失败');
+        setCardError(card, upResult.error || '图片上传失败');
+        log(`  上传失败: ${upResult.error}`, 'error');
+        continue;
+      }
       const assetData = {
         url: upResult.data.url,
         mimeType: upResult.data.mimeType,
@@ -953,6 +1241,8 @@ async function submitSelected() {
       };
       log('  图片上传成功', 'success');
 
+      // Create
+      setCardState(card, 'running', '创建作品…');
       log('  创建作品…');
       const workData = {
         authorId,
@@ -966,19 +1256,51 @@ async function submitSelected() {
       };
 
       const createResult = await apiCall(`${baseUrl}/api/works`, 'POST', workData);
-      if (!createResult.success) { log(`  创建出错: ${createResult.error}`, 'error'); continue; }
-      if (!createResult.data.success) { log(`  创建失败: ${createResult.data.message}`, 'error'); continue; }
+      if (!createResult.success) {
+        setCardState(card, 'error', '创建失败');
+        setCardError(card, createResult.error || '创建作品失败');
+        log(`  创建出错: ${createResult.error}`, 'error');
+        continue;
+      }
+      if (!createResult.data.success) {
+        setCardState(card, 'error', '创建失败');
+        setCardError(card, createResult.data.message || '创建作品失败');
+        log(`  创建失败: ${createResult.data.message}`, 'error');
+        continue;
+      }
+      const createdWork = createResult.data.data;
+      const workId = createdWork.id;
 
-      const workId = createResult.data.data.id;
-      await apiCall(`${baseUrl}/api/works/${workId}/publish`, 'POST');
+      // Publish
+      setCardState(card, 'running', '发布中…');
+      const pubResult = await apiCall(`${baseUrl}/api/works/${workId}/publish`, 'POST');
+      const publishOk = pubResult?.success && pubResult?.data?.success;
+      const publishedWork = (publishOk && pubResult.data.data) || createdWork;
+
+      if (!publishOk) {
+        // Created but publish failed — still show the work link to the draft.
+        setCardState(card, 'error', '已创建（未发布）');
+        setCardError(card, '作品已创建，但发布失败：' + (pubResult?.error || pubResult?.data?.message || '未知错误'));
+        setCardResult(card, publishedWork, baseUrl);
+        log('  发布失败（草稿已保留）', 'error');
+        continue;
+      }
+
+      setCardState(card, 'done', '已发布');
+      setCardResult(card, publishedWork, baseUrl);
       successCount++;
+      updateProgress(successCount, selected.length);
       log('  提交成功!', 'success');
     }
 
+    setProgressActive(false);
+    showSubmitFinal(successCount, selected.length);
     log(`\n${'─'.repeat(28)}`);
     log(`完成! 成功提交 ${successCount}/${selected.length} 个作品`, 'success');
   } catch (e) {
+    setProgressActive(false);
     log(`流程出错: ${e.message}`, 'error');
+    showSubmitFinal(successCount, selected.length);
   }
 }
 

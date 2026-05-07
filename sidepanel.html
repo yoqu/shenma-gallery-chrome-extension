@@ -45,6 +45,15 @@
       <button id="btn-logout" class="btn btn-sm btn-ghost hidden" title="退出">退出</button>
     </div>
 
+    <!-- Active site adapter banner — shows when current tab matches a known site -->
+    <div id="site-adapter-banner" class="site-adapter-banner hidden" role="status">
+      <span class="site-adapter-icon" data-site-icon></span>
+      <span class="site-adapter-text">
+        <strong data-site-name></strong>
+        <span data-site-tagline></span>
+      </span>
+    </div>
+
     <details class="debug-panel">
       <summary>调试日志</summary>
       <div id="debug-log" class="debug-log"></div>
@@ -128,9 +137,26 @@
 
       <!-- Step: submit log -->
       <section class="step step-submit" data-step="submit">
-        <div class="card">
-          <h3 class="card-title">提交进度</h3>
-          <div id="submit-log" class="submit-log"></div>
+        <div class="card submit-progress-card">
+          <div class="submit-summary">
+            <span class="submit-summary-title">提交进度</span>
+            <span class="submit-summary-meta">
+              <span id="submit-count-current">0</span><span class="submit-summary-sep">/</span><span id="submit-count-total">0</span>
+            </span>
+          </div>
+          <div class="submit-progress-line" id="submit-progress-line">
+            <div class="submit-progress-line-fill" id="submit-progress-line-fill" style="width:0%"></div>
+          </div>
+
+          <div id="submit-cards" class="submit-cards"></div>
+
+          <div id="submit-final" class="submit-final hidden"></div>
+
+          <details class="submit-rawlog">
+            <summary>查看详细日志</summary>
+            <div id="submit-log" class="submit-log"></div>
+          </details>
+
           <div class="actions-row" style="margin-top:12px;">
             <button id="btn-submit-back" class="btn btn-secondary btn-block">完成 / 返回</button>
           </div>
@@ -193,6 +219,14 @@
           <label>模型名称</label>
           <input type="text" id="llm-model" placeholder="gpt-4o-mini" list="llm-model-options">
           <datalist id="llm-model-options"></datalist>
+        </div>
+        <div class="form-group">
+          <label>思考模式</label>
+          <label class="switch-row" for="llm-thinking">
+            <input type="checkbox" id="llm-thinking">
+            <span>DeepSeek 思考模式（默认关闭）</span>
+          </label>
+          <p class="form-hint">仅 DeepSeek / 兼容接口生效；关闭时会显式发送非思考配置。</p>
         </div>
       </div>
 
@@ -295,6 +329,8 @@
   </div>
 
   <script src="providers.js"></script>
+  <script src="html-preprocessor.js"></script>
+  <script src="site-adapters.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

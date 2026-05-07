@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "神马图鉴收集助手",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "快速收集网页中的AI生成图片和提示词，一键添加到趣神马网站",
   "permissions": [
     "activeTab",
