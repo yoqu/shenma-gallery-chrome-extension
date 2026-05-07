@@ -27,6 +27,7 @@ const poolList = document.getElementById('img-pool-list');
 const resultsList = document.getElementById('results-list');
 const resultsCount = document.getElementById('results-count');
 const submitLogEl = document.getElementById('submit-log');
+const debugLogEl = document.getElementById('debug-log');
 
 const siteDomain = document.getElementById('site-domain');
 const siteToken = document.getElementById('site-token');
@@ -47,6 +48,7 @@ let organizedItems = [];
 let candidateImages = [];
 let pickingTabId = null;
 let editingIndex = -1;
+let debugEntryCount = 0;
 
 // ============ Lifecycle ============
 document.addEventListener('DOMContentLoaded', async () => {
@@ -68,6 +70,65 @@ chrome.storage.onChanged?.addListener((changes, area) => {
 // ============ Step machine ============
 function showStep(name) {
   stage.querySelectorAll('.step').forEach(el => el.classList.toggle('active', el.dataset.step === name));
+}
+
+function summarizeText(text, maxLen = 180) {
+  return String(text || '').replace(/\s+/g, ' ').trim().slice(0, maxLen);
+}
+
+function summarizeNode(node) {
+  if (!node) return null;
+  const className = typeof node.className === 'string'
+    ? node.className.trim().split(/\s+/).filter(Boolean).slice(0, 4).join(' ')
+    : '';
+  const attrs = {};
+  ['role', 'data-testid', 'aria-label', 'href', 'src', 'alt'].forEach((name) => {
+    const value = node.getAttribute?.(name);
+    if (value) attrs[name] = value.slice(0, 120);
+  });
+  const rect = node.getBoundingClientRect?.();
+  return {
+    tag: node.tagName ? node.tagName.toLowerCase() : '',
+    id: node.id || '',
+    className,
+    attrs,
+    textLength: (node.innerText || '').length,
+    htmlLength: (node.outerHTML || '').length,
+    textPreview: summarizeText(node.innerText || '', 220),
+    htmlPreview: summarizeText(node.outerHTML || '', 320),
+    rect: rect ? {
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    } : null,
+  };
+}
+
+function appendDebugLog(level, title, details = null) {
+  const stamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  const detailText = details == null
+    ? ''
+    : (typeof details === 'string' ? details : JSON.stringify(details, null, 2));
+  const text = detailText ? `[${stamp}] ${title}\n${detailText}` : `[${stamp}] ${title}`;
+
+  console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'debug']?.(`[Shenma] ${title}`, details || '');
+
+  if (!debugLogEl) return;
+  const entry = document.createElement('div');
+  entry.className = `debug-entry ${level}`;
+  entry.textContent = text;
+  debugLogEl.appendChild(entry);
+  debugEntryCount += 1;
+  while (debugEntryCount > 40 && debugLogEl.firstElementChild) {
+    debugLogEl.removeChild(debugLogEl.firstElementChild);
+    debugEntryCount -= 1;
+  }
+  debugLogEl.scrollTop = debugLogEl.scrollHeight;
+}
+
+function debugLog(title, details = null, level = 'info') {
+  appendDebugLog(level, title, details);
 }
 
 // ============ Provider presets ============
@@ -289,6 +350,11 @@ async function startPicking() {
     }
     pickingTabId = tab.id;
     showStep('picking');
+    debugLog('开始选择区域', {
+      tabId: tab.id,
+      url: tab.url || '',
+      title: tab.title || '',
+    });
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: ['picker.js'],
@@ -318,6 +384,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Only accept messages from the tab we're picking in.
   if (pickingTabId != null && sender.tab && sender.tab.id !== pickingTabId) return;
 
+  if (msg.type === 'PICKER_DEBUG') {
+    debugLog(`页面侧 ${msg.event || 'debug'}`, msg.payload || {});
+    sendResponse({ ok: true });
+    return;
+  }
   if (msg.type === 'PICKER_PICKED') {
     pickingTabId = null;
     handlePickedElement(msg.payload || {});
@@ -337,6 +408,21 @@ async function handlePickedElement(payload) {
   const html = String(payload.html || '').slice(0, 50000);
   const text = String(payload.text || '').slice(0, 10000);
   candidateImages = Array.isArray(payload.candidateImages) ? payload.candidateImages : [];
+  const pickDebug = payload.debug || null;
+  const pageInfo = pickDebug?.page || {};
+
+  debugLog('收到选区', {
+    htmlLength: html.length,
+    textLength: text.length,
+    candidateImages: candidateImages.length,
+    page: pageInfo,
+    selection: pickDebug ? {
+      node: pickDebug.node || null,
+      picked: pickDebug.picked || null,
+      ancestor: pickDebug.ancestor || null,
+      signal: pickDebug.signal || null,
+    } : null,
+  });
 
   showStep('ai');
   setAIStatus('正在准备发送给 AI…');
@@ -349,10 +435,29 @@ async function handlePickedElement(payload) {
     drawer.classList.add('open');
     return;
   }
+  if (isTweetPage(pageInfo) && looksLikeTextOnlyModel(llm)) {
+    debugLog('模型能力提示', {
+      baseUrl: llm.llmBaseUrl,
+      model: llm.llmModel,
+      hint: '当前模型更像文本模型，X / Twitter 这类图文页建议使用视觉模型',
+    }, 'warn');
+    showToast('当前模型更像文本模型，X / Twitter 这类页面建议换视觉模型', 'info');
+  }
 
   try {
+    debugLog('发送 AI 请求', {
+      baseUrl: llm.llmBaseUrl,
+      model: llm.llmModel,
+      htmlLength: html.length,
+      textLength: text.length,
+      candidateImages: candidateImages.length,
+    });
     const items = await callAI(html, text, llm);
     if (items && items.length > 0) {
+      debugLog('AI 识别成功', {
+        items: items.length,
+        firstItem: summarizeNodeLike(items[0]),
+      }, 'success');
       items.forEach((item, idx) => {
         if (!item.model || !String(item.model).trim()) item.model = 'gpt-image-2';
         if (!item.title || !String(item.title).trim()) item.title = deriveTitle(item, idx);
@@ -361,10 +466,22 @@ async function handlePickedElement(payload) {
       renderResults(items);
       showStep('results');
     } else {
+      debugLog('AI 未识别出作品', {
+        htmlLength: html.length,
+        textLength: text.length,
+        candidateImages: candidateImages.length,
+      selection: pickDebug ? {
+        node: pickDebug.node || null,
+        picked: pickDebug.picked || null,
+        ancestor: pickDebug.ancestor || null,
+        signal: pickDebug.signal || null,
+      } : null,
+    }, 'warn');
       setAIStatus('AI 未识别出作品，请尝试选择其它区域');
       setTimeout(() => showStep('idle'), 2400);
     }
   } catch (e) {
+    debugLog('AI 分析失败', { message: e.message }, 'error');
     setAIStatus(`AI 分析失败: ${e.message}`);
     setTimeout(() => showStep('idle'), 3000);
   }
@@ -372,7 +489,11 @@ async function handlePickedElement(payload) {
 
 function setAIStatus(text) { aiStatus.textContent = text; }
 
-async function callAI(html, text, llm) {
+async function callAI(html, text, llm, context = {}) {
+  const pageInfo = context.pageInfo || {};
+  const selectionDebug = context.pickDebug || null;
+  const host = String(pageInfo.hostname || '').toLowerCase();
+  const isTweetPage = host.endsWith('x.com') || host.endsWith('twitter.com');
   const systemPrompt = `你是 AI 艺术内容搬运助手。从用户选中的网页 HTML 中按**原文**提取每个图片及其元信息。
 
 【最重要的规则——违反即视为失败】
@@ -400,10 +521,36 @@ async function callAI(html, text, llm) {
 5. 无提示词的图片也收录（prompt 留空字符串）
 
 返回格式: [{"imageUrl":"","title":"","prompt":"","negativePrompt":"","model":"","tags":[],"summary":""}]
-无有效内容返回 []`;
+无有效内容返回 []${isTweetPage ? `
+
+补充规则（X / Twitter 页面）：
+- 这类页面通常是一条 tweet 搭配若干媒体图。
+- 优先把单条 tweet/article 当作一条作品，不要把整列时间线当成一个作品。
+- 使用 tweet 正文作为 prompt / summary，使用候选图片 URL 作为 imageUrl。
+- 即使看不出图片细节，只要推文正文和候选图片 URL 明确，也不要直接返回 []。` : ''}`;
 
   let userMsg = `## 选中区域HTML\n\`\`\`html\n${html.substring(0, 15000)}\n\`\`\`\n`;
   if (text) userMsg += `\n## 纯文本\n${text.substring(0, 5000)}\n`;
+  if (pageInfo && Object.keys(pageInfo).length > 0) {
+    userMsg += `\n## 页面信息\n\`\`\`json\n${JSON.stringify(pageInfo, null, 2)}\n\`\`\`\n`;
+  }
+  if (selectionDebug) {
+    userMsg += `\n## 选区摘要\n\`\`\`json\n${JSON.stringify({
+      node: selectionDebug.node || null,
+      picked: selectionDebug.picked || null,
+      ancestor: selectionDebug.ancestor || null,
+      signal: selectionDebug.signal || null,
+    }, null, 2)}\n\`\`\`\n`;
+  }
+  if (candidateImages.length > 0) {
+    userMsg += `\n## 候选图片 URL\n\`\`\`json\n${JSON.stringify(candidateImages.slice(0, 12), null, 2)}\n\`\`\`\n`;
+  }
+  if (isTweetPage) {
+    userMsg += `
+
+## X / Twitter 识别提示
+这是一条社交媒体帖子页面。请把推文正文当作主要文本，把候选图片 URL 当作附件图片，不要把 emoji、头像、按钮图标、站点导航图标当成作品图片。`;
+  }
 
   setAIStatus('正在等待 AI 响应…');
   const resp = await fetch(`${llm.llmBaseUrl}/chat/completions`, {
@@ -429,7 +576,17 @@ async function callAI(html, text, llm) {
   const data = await resp.json();
   const content = data.choices?.[0]?.message?.content;
   if (!content) throw new Error('AI 返回空内容');
-  return parseJSON(content);
+  debugLog('AI 原始返回', {
+    contentLength: content.length,
+    preview: summarizeText(content, 500),
+  });
+  const parsed = parseJSON(content);
+  if (!parsed) {
+    debugLog('AI 返回无法解析为 JSON', {
+      preview: summarizeText(content, 800),
+    }, 'warn');
+  }
+  return parsed;
 }
 
 function parseJSON(content) {
@@ -445,6 +602,36 @@ function parseJSON(content) {
     }
     return null;
   }
+}
+
+function summarizeNodeLike(item) {
+  if (!item || typeof item !== 'object') return item;
+  return {
+    imageUrl: summarizeText(item.imageUrl || '', 120),
+    title: summarizeText(item.title || '', 60),
+    promptLength: String(item.prompt || '').length,
+    negativePromptLength: String(item.negativePrompt || '').length,
+    model: summarizeText(item.model || '', 40),
+    tags: Array.isArray(item.tags) ? item.tags.slice(0, 6) : [],
+    summary: summarizeText(item.summary || '', 60),
+  };
+}
+
+function isTweetPage(pageInfo = {}) {
+  const host = String(pageInfo.hostname || '').toLowerCase();
+  return host.endsWith('x.com') || host.endsWith('twitter.com');
+}
+
+function looksLikeTextOnlyModel(llm) {
+  const hint = `${String(llm?.llmBaseUrl || '')} ${String(llm?.llmModel || '')}`.toLowerCase();
+  if (!hint.trim()) return false;
+  if (hint.includes('deepseek')) {
+    return !/(vision|vl|multimodal|image)/.test(hint);
+  }
+  if (/(text[-\s]?only|reasoner|chat)/.test(hint) && !/(vision|vl|multimodal|image)/.test(hint)) {
+    return true;
+  }
+  return false;
 }
 
 // ============ Results render (with drag-drop) ============

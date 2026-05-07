@@ -148,6 +148,46 @@ body { overflow: hidden; }
   50% { box-shadow: 0 0 12px oklch(0.88 0.18 130 / 0.6); }
 }
 
+/* ─── Debug panel ─── */
+.debug-panel {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--stroke);
+  background: rgba(255, 255, 255, 0.01);
+}
+.debug-panel summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 9px 14px;
+  color: var(--ink-2);
+  font-size: 12px;
+  font-weight: 500;
+}
+.debug-panel summary::-webkit-details-marker { display: none; }
+.debug-log {
+  max-height: 150px;
+  overflow: auto;
+  padding: 0 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+.debug-entry {
+  padding: 8px 10px;
+  border: 1px solid var(--stroke);
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.02);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.debug-entry.info { color: var(--ink-2); }
+.debug-entry.success { color: var(--lime); }
+.debug-entry.error { color: var(--danger); }
+.debug-entry.warn { color: var(--amber); }
+
 /* ─── Stage / steps ─── */
 .stage {
   flex: 1; min-height: 0;
