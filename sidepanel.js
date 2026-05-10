@@ -23,6 +23,7 @@ const btnBulkPrompt = document.getElementById('btn-bulk-prompt');
 const btnSubmit = document.getElementById('btn-submit');
 const btnSubmitBack = document.getElementById('btn-submit-back');
 const btnSubmitContinue = document.getElementById('btn-submit-continue');
+const btnCancelAi = document.getElementById('btn-cancel-ai');
 
 const aiStatus = document.getElementById('ai-status');
 const poolList = document.getElementById('img-pool-list');
@@ -58,6 +59,7 @@ let candidateImages = [];
 let pickingTabId = null;
 let editingIndex = -1;
 let debugEntryCount = 0;
+let aiAbortController = null;
 
 // ============ Lifecycle ============
 document.addEventListener('DOMContentLoaded', async () => {
@@ -406,6 +408,17 @@ btnBack.addEventListener('click', () => drawer.classList.remove('open'));
 btnPick.addEventListener('click', startPicking);
 btnRepick.addEventListener('click', startPicking);
 btnCancelPick.addEventListener('click', cancelPicking);
+btnCancelAi?.addEventListener('click', cancelAiAnalysis);
+
+function cancelAiAnalysis() {
+  if (aiAbortController) {
+    try { aiAbortController.abort(); } catch {}
+    aiAbortController = null;
+  }
+  setAIStatus('已取消');
+  showStep('idle');
+  showToast('已取消生成', 'info');
+}
 
 async function startPicking() {
   try {
@@ -553,6 +566,12 @@ async function handlePickedElement(payload) {
     showToast('当前模型更像文本模型，X / Twitter 这类页面建议换视觉模型', 'info');
   }
 
+  if (aiAbortController) {
+    try { aiAbortController.abort(); } catch {}
+  }
+  aiAbortController = new AbortController();
+  const signal = aiAbortController.signal;
+
   try {
     debugLog('发送 AI 请求', {
       baseUrl: llm.llmBaseUrl,
@@ -565,7 +584,9 @@ async function handlePickedElement(payload) {
     const items = await callAI(html, text, llm, {
       pageInfo,
       pickDebug,
+      signal,
     });
+    if (signal.aborted) return;
     if (items && items.length > 0) {
       debugLog('AI 识别成功', {
         items: items.length,
@@ -595,9 +616,19 @@ async function handlePickedElement(payload) {
       setTimeout(() => showStep('idle'), 2400);
     }
   } catch (e) {
-    debugLog('AI 分析失败', { message: e.message }, 'error');
-    setAIStatus(`AI 分析失败: ${e.message}`);
-    setTimeout(() => showStep('idle'), 3000);
+    if (e?.name === 'AbortError' || signal.aborted) {
+      debugLog('AI 分析已取消', { reason: e?.message || 'aborted' }, 'warn');
+    } else {
+      debugLog('AI 分析失败', { message: e.message }, 'error');
+      setAIStatus(`AI 分析失败: ${e.message}`);
+      setTimeout(() => {
+        if (stage.querySelector('.step.active')?.dataset.step === 'ai') showStep('idle');
+      }, 3000);
+    }
+  } finally {
+    if (aiAbortController && aiAbortController.signal === signal) {
+      aiAbortController = null;
+    }
   }
 }
 
@@ -606,6 +637,7 @@ function setAIStatus(text) { aiStatus.textContent = text; }
 async function callAI(html, text, llm, context = {}) {
   const pageInfo = context.pageInfo || {};
   const selectionDebug = context.pickDebug || null;
+  const signal = context.signal || null;
   const host = String(pageInfo.hostname || '').toLowerCase();
   const isTweetPage = host.endsWith('x.com') || host.endsWith('twitter.com');
   const systemPrompt = `你是 AI 艺术内容搬运助手。从用户选中的网页结构摘要中按**原文**提取每个图片及其元信息。
@@ -684,6 +716,7 @@ async function callAI(html, text, llm, context = {}) {
       max_tokens: 4000,
       ...(buildThinkingConfig(llm) || {}),
     }),
+    signal,
   });
 
   if (!resp.ok) throw new Error(`AI 接口返回 ${resp.status}`);
@@ -983,6 +1016,11 @@ document.addEventListener('keydown', (e) => {
 // ============ Submit ============
 btnSubmit.addEventListener('click', submitSelected);
 btnSubmitBack.addEventListener('click', () => showStep('idle'));
+btnSubmitContinue?.addEventListener('click', () => {
+  organizedItems = [];
+  candidateImages = [];
+  startPicking();
+});
 
 // ─── Submit progress (single-line, minimal) ───
 const PENDING_INDICATOR = '<span class="submit-card-indicator" aria-hidden="true"></span>';

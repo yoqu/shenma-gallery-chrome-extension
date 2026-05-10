@@ -1,6 +1,6 @@
 {
   "name": "shenma-gallery-chrome-extension",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": false,
   "description": "Chrome MV3 side panel extension for collecting AI image prompts into Qushenma.",
   "license": "MIT",
