@@ -19,8 +19,10 @@ const btnPick = document.getElementById('btn-pick');
 const btnCancelPick = document.getElementById('btn-cancel-pick');
 const btnRepick = document.getElementById('btn-repick');
 const btnSelectAll = document.getElementById('btn-select-all');
+const btnBulkPrompt = document.getElementById('btn-bulk-prompt');
 const btnSubmit = document.getElementById('btn-submit');
 const btnSubmitBack = document.getElementById('btn-submit-back');
+const btnSubmitContinue = document.getElementById('btn-submit-continue');
 
 const aiStatus = document.getElementById('ai-status');
 const poolList = document.getElementById('img-pool-list');

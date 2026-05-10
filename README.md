@@ -2,6 +2,8 @@
 
 一个公开可用的 Chrome Manifest V3 扩展，用侧边栏从网页中收集 AI 图片、提示词、模型和标签，并批量提交到 [趣神马](https://www.qushenma.com/)。
 
+源码位于本仓库；主站仓库通过 Git 子模块引用到 `chrome-extension/`。
+
 ![侧边栏开始页](docs/screenshots/01-sidepanel-start.png)
 
 ## 功能

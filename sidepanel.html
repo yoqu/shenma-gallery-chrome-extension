@@ -124,6 +124,7 @@
 
         <div class="results-meta">
           <span id="results-count" class="results-count">0 个作品</span>
+          <button id="btn-bulk-prompt" class="btn btn-sm btn-ghost" title="给所有作品批量填入提示词">批量提示词</button>
           <button id="btn-select-all" class="btn btn-sm btn-ghost">全选</button>
         </div>
 
@@ -158,7 +159,8 @@
           </details>
 
           <div class="actions-row" style="margin-top:12px;">
-            <button id="btn-submit-back" class="btn btn-secondary btn-block">完成 / 返回</button>
+            <button id="btn-submit-continue" class="btn btn-primary btn-flex">继续选择</button>
+            <button id="btn-submit-back" class="btn btn-secondary">完成</button>
           </div>
         </div>
       </section>
@@ -312,6 +314,48 @@
       <div class="modal-footer">
         <button class="btn btn-secondary" data-action="cancel">取消</button>
         <button class="btn btn-primary btn-flex" data-action="save">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Bulk prompt modal ═══ -->
+  <div id="bulk-prompt-modal" class="modal">
+    <div class="modal-backdrop"></div>
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <span class="modal-title">批量填入提示词</span>
+        <button class="modal-close icon-btn" title="关闭 (ESC)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p class="form-hint" style="margin: 0 0 10px;">AI 识别提示词不准确时，可以在此一次性填入所有作品的提示词。</p>
+        <div class="form-group">
+          <label>正向提示词 (Prompt)</label>
+          <textarea id="bulk-prompt-text" rows="6" placeholder="例如：a serene mountain lake at sunrise, photorealistic, 8k"></textarea>
+        </div>
+        <div class="form-group">
+          <label>负面提示词 (Negative Prompt) — 可选</label>
+          <textarea id="bulk-negative-prompt-text" rows="3" placeholder="负面提示词（可选）"></textarea>
+        </div>
+        <div class="form-group">
+          <label>模型 — 可选</label>
+          <input type="text" id="bulk-model-text" list="shenma-model-options" placeholder="例如：Midjourney v7（留空则不修改）" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label class="switch-row" for="bulk-scope-selected">
+            <input type="checkbox" id="bulk-scope-selected">
+            <span>仅应用到已勾选作品（默认应用全部）</span>
+          </label>
+          <label class="switch-row" for="bulk-only-empty">
+            <input type="checkbox" id="bulk-only-empty">
+            <span>仅填入当前为空的字段（不覆盖已有内容）</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-action="cancel">取消</button>
+        <button class="btn btn-primary btn-flex" data-action="apply">应用到作品</button>
       </div>
     </div>
   </div>
