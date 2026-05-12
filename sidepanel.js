@@ -1091,11 +1091,30 @@ function setCardState(card, kind /* pending|running|done|error */, subText) {
   }
 }
 
-function setCardError(card, message) {
+function setCardError(card, message, options = {}) {
   if (!card) return;
   const slot = card.querySelector('.submit-card-error-slot');
   if (!slot) return;
   slot.innerHTML = `<div class="submit-card-error">${esc(message)}</div>`;
+  if (options.onRetry) {
+    const btn = document.createElement('button');
+    btn.className = 'submit-card-retry-btn';
+    btn.type = 'button';
+    btn.innerHTML = `
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polyline points="1 4 1 10 7 10"/>
+        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+      </svg>
+      <span>${esc(options.retryLabel || '重试')}</span>`;
+    btn.addEventListener('click', options.onRetry);
+    slot.appendChild(btn);
+  }
+}
+
+function clearCardError(card) {
+  if (!card) return;
+  const slot = card.querySelector('.submit-card-error-slot');
+  if (slot) slot.innerHTML = '';
 }
 
 function setCardResult(card, work, baseUrl) {
@@ -1139,7 +1158,7 @@ function setProgressActive(active) {
   submitProgressLineEl.classList.toggle('is-active', !!active);
 }
 
-function showSubmitFinal(success, total) {
+function showSubmitFinal(success, total, options = {}) {
   if (!submitFinalEl) return;
   const fail = total - success;
   const isAllOk = fail === 0 && total > 0;
@@ -1148,12 +1167,32 @@ function showSubmitFinal(success, total) {
   const iconHtml = isAllOk
     ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg>`
     : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`;
+  const retryAllHtml = !isAllOk && options.onRetryAll
+    ? `<button class="submit-final-retry-btn" type="button">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+           <polyline points="1 4 1 10 7 10"/>
+           <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/>
+         </svg>
+         <span>重试全部失败项 (${fail})</span>
+       </button>`
+    : '';
   submitFinalEl.innerHTML = `
     <div class="submit-final-icon">${iconHtml}</div>
     <div class="submit-final-text">
       ${isAllOk ? '全部提交成功' : `完成：${success} 成功 · ${fail} 失败`}
       <small>共 ${total} 个作品</small>
-    </div>`;
+    </div>
+    ${retryAllHtml}`;
+  if (!isAllOk && options.onRetryAll) {
+    const btn = submitFinalEl.querySelector('.submit-final-retry-btn');
+    btn?.addEventListener('click', options.onRetryAll);
+  }
+}
+
+function hideSubmitFinal() {
+  if (!submitFinalEl) return;
+  submitFinalEl.classList.add('hidden');
+  submitFinalEl.innerHTML = '';
 }
 
 function openWorkInTab(url) {
@@ -1174,6 +1213,219 @@ if (submitCardsEl) {
   });
 }
 
+// ─── Submit session state (module-scoped so retry can resume) ───
+// Tasks track per-item phase so a retry knows where to pick up:
+//   upload → create → publish → done
+// `skipped` means the item is missing data we can't recover from a button click
+// (e.g., no imageUrl); we don't offer retry for those.
+let currentSubmitTasks = [];
+let currentSubmitCtx = null;
+let submitFlowBusy = false;
+
+function submitApiCall(ctx, url, method = 'GET', body = null) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({
+      type: 'API_REQUEST',
+      url,
+      method,
+      headers: {
+        'Authorization': `Bearer ${ctx.token}`,
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+      },
+      body,
+    }, resolve);
+  });
+}
+
+function submitUploadImage(ctx, imageUrl) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({
+      type: 'UPLOAD_IMAGE',
+      imageUrl,
+      uploadUrl: `${ctx.baseUrl}/api/media/upload`,
+      token: ctx.token,
+    }, resolve);
+  });
+}
+
+function logToSubmit(text, type = 'info') {
+  if (!submitLogEl) return;
+  const div = document.createElement('div');
+  div.className = `log-entry ${type}`;
+  div.textContent = text;
+  submitLogEl.appendChild(div);
+  submitLogEl.scrollTop = submitLogEl.scrollHeight;
+}
+
+function countSubmitDone() {
+  return currentSubmitTasks.filter(t => t.phase === 'done').length;
+}
+
+function refreshSubmitFinal() {
+  const total = currentSubmitTasks.length;
+  if (total === 0) return;
+  const done = countSubmitDone();
+  const allSettled = currentSubmitTasks.every(t => t.phase === 'done' || t.phase === 'failed' || t.phase === 'skipped');
+  if (!allSettled) {
+    hideSubmitFinal();
+    return;
+  }
+  const hasRetryable = currentSubmitTasks.some(t => t.phase === 'failed');
+  showSubmitFinal(done, total, hasRetryable ? { onRetryAll: retryAllFailedTasks } : {});
+}
+
+// Run a single task from its current phase forward. Updates the card UI and
+// task state in-place. Returns true if the task ended in `done`.
+async function processSubmitTask(task) {
+  const ctx = currentSubmitCtx;
+  const card = task.card;
+  const item = task.item;
+  const label = `[${task.index + 1}/${currentSubmitTasks.length}] ${item.title || '未命名'}`;
+
+  if (!item.imageUrl) {
+    task.phase = 'skipped';
+    setCardState(card, 'error', '缺少图片，已跳过');
+    setCardError(card, '该条目缺少图片，已跳过');
+    logToSubmit(`${label}: 无图片，跳过`, 'error');
+    return false;
+  }
+
+  clearCardError(card);
+
+  // ─── Phase: upload ───
+  if (task.phase === 'upload') {
+    setCardState(card, 'running', '上传图片…');
+    logToSubmit(`${label}: 上传图片…`);
+    const upResult = await submitUploadImage(ctx, item.imageUrl);
+    if (!upResult?.success) {
+      task.phase = 'failed';
+      task.failedAt = 'upload';
+      const msg = upResult?.error || '图片上传失败';
+      setCardState(card, 'error', '上传失败');
+      setCardError(card, msg, { onRetry: () => retrySubmitTask(task) });
+      logToSubmit(`  上传失败: ${msg}`, 'error');
+      return false;
+    }
+    task.assetData = {
+      url: upResult.data.url,
+      mimeType: upResult.data.mimeType,
+      fileSize: upResult.data.fileSize,
+      width: upResult.data.width,
+      height: upResult.data.height,
+      aspectRatio: upResult.data.aspectRatio,
+      fileHash: upResult.data.fileHash,
+    };
+    task.phase = 'create';
+    logToSubmit('  图片上传成功', 'success');
+  }
+
+  // ─── Phase: create ───
+  if (task.phase === 'create') {
+    setCardState(card, 'running', '创建作品…');
+    logToSubmit(`${label}: 创建作品…`);
+    const workData = {
+      authorId: ctx.authorId,
+      title: item.title || `收集作品 ${task.index + 1}`,
+      summary: item.summary || '',
+      prompt: item.prompt || '',
+      negativePrompt: item.negativePrompt || '',
+      asset: task.assetData,
+      generation: { model: item.model || '' },
+      customTags: (item.tags || []).slice(0, 8),
+    };
+    const createResult = await submitApiCall(ctx, `${ctx.baseUrl}/api/works`, 'POST', workData);
+    if (!createResult?.success) {
+      task.phase = 'failed';
+      task.failedAt = 'create';
+      const msg = createResult?.error || '创建作品失败';
+      setCardState(card, 'error', '创建失败');
+      setCardError(card, msg, { onRetry: () => retrySubmitTask(task) });
+      logToSubmit(`  创建出错: ${msg}`, 'error');
+      return false;
+    }
+    if (!createResult.data?.success) {
+      task.phase = 'failed';
+      task.failedAt = 'create';
+      const msg = createResult.data?.message || '创建作品失败';
+      setCardState(card, 'error', '创建失败');
+      setCardError(card, msg, { onRetry: () => retrySubmitTask(task) });
+      logToSubmit(`  创建失败: ${msg}`, 'error');
+      return false;
+    }
+    task.work = createResult.data.data;
+    task.workId = task.work.id;
+    task.phase = 'publish';
+  }
+
+  // ─── Phase: publish ───
+  if (task.phase === 'publish') {
+    setCardState(card, 'running', '发布中…');
+    const pubResult = await submitApiCall(ctx, `${ctx.baseUrl}/api/works/${task.workId}/publish`, 'POST');
+    const publishOk = pubResult?.success && pubResult?.data?.success;
+    if (!publishOk) {
+      task.work = (pubResult?.data?.data) || task.work;
+      task.phase = 'failed';
+      task.failedAt = 'publish';
+      const msg = '作品已创建，但发布失败：' + (pubResult?.error || pubResult?.data?.message || '未知错误');
+      setCardState(card, 'error', '已创建（未发布）');
+      setCardError(card, msg, { onRetry: () => retrySubmitTask(task), retryLabel: '重试发布' });
+      setCardResult(card, task.work, ctx.baseUrl);
+      logToSubmit(`${label}: 发布失败（草稿已保留）`, 'error');
+      return false;
+    }
+    task.work = pubResult.data.data || task.work;
+    task.phase = 'done';
+    setCardState(card, 'done', '已发布');
+    setCardResult(card, task.work, ctx.baseUrl);
+    logToSubmit(`${label}: 提交成功!`, 'success');
+    return true;
+  }
+
+  return task.phase === 'done';
+}
+
+async function retrySubmitTask(task) {
+  if (submitFlowBusy) return;
+  if (task.phase !== 'failed') return;
+  submitFlowBusy = true;
+  hideSubmitFinal();
+  setProgressActive(true);
+  // Resume from the phase that failed — we keep prior phases' results
+  // (assetData, workId) so e.g. publish retry doesn't re-upload.
+  task.phase = task.failedAt || 'upload';
+  task.failedAt = null;
+  try {
+    await processSubmitTask(task);
+  } finally {
+    updateProgress(countSubmitDone(), currentSubmitTasks.length);
+    setProgressActive(false);
+    refreshSubmitFinal();
+    submitFlowBusy = false;
+  }
+}
+
+async function retryAllFailedTasks() {
+  if (submitFlowBusy) return;
+  const failed = currentSubmitTasks.filter(t => t.phase === 'failed');
+  if (failed.length === 0) return;
+  submitFlowBusy = true;
+  hideSubmitFinal();
+  setProgressActive(true);
+  try {
+    for (const task of failed) {
+      if (task.phase !== 'failed') continue;
+      task.phase = task.failedAt || 'upload';
+      task.failedAt = null;
+      await processSubmitTask(task);
+      updateProgress(countSubmitDone(), currentSubmitTasks.length);
+    }
+  } finally {
+    setProgressActive(false);
+    refreshSubmitFinal();
+    submitFlowBusy = false;
+  }
+}
+
 async function submitSelected() {
   const cbs = resultsList.querySelectorAll('input:checked');
   const indices = Array.from(cbs).map(cb => parseInt(cb.dataset.index));
@@ -1192,155 +1444,64 @@ async function submitSelected() {
   showStep('submit');
   submitLogEl.innerHTML = '';
   submitCardsEl.innerHTML = '';
-  submitFinalEl.classList.add('hidden');
-  submitFinalEl.innerHTML = '';
+  hideSubmitFinal();
 
   const domain = s.siteDomain || 'www.qushenma.com';
   const protocol = domain.includes('localhost') ? 'http' : 'https';
   const baseUrl = `${protocol}://${domain}`;
-  let successCount = 0;
 
-  // Pre-build a card per item so progress is visible from the start
-  const cards = selected.map((item, i) => buildSubmitCard(i, item, selected.length));
-  updateProgress(0, selected.length);
+  // Build per-item tasks with cards and initial phase
+  currentSubmitTasks = selected.map((item, i) => ({
+    index: i,
+    item,
+    card: buildSubmitCard(i, item, selected.length),
+    phase: 'upload',
+    failedAt: null,
+    assetData: null,
+    workId: null,
+    work: null,
+  }));
+  currentSubmitCtx = { baseUrl, token: s.siteToken, authorId: null };
+  submitFlowBusy = true;
+  updateProgress(0, currentSubmitTasks.length);
   setProgressActive(true);
 
-  function log(text, type = 'info') {
-    const div = document.createElement('div');
-    div.className = `log-entry ${type}`;
-    div.textContent = text;
-    submitLogEl.appendChild(div);
-    submitLogEl.scrollTop = submitLogEl.scrollHeight;
-  }
-
-  function apiCall(url, method = 'GET', body = null) {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage({
-        type: 'API_REQUEST',
-        url,
-        method,
-        headers: {
-          'Authorization': `Bearer ${s.siteToken}`,
-          ...(body ? { 'Content-Type': 'application/json' } : {}),
-        },
-        body,
-      }, resolve);
-    });
-  }
-
-  function uploadImage(imageUrl) {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage({
-        type: 'UPLOAD_IMAGE',
-        imageUrl,
-        uploadUrl: `${baseUrl}/api/media/upload`,
-        token: s.siteToken,
-      }, resolve);
-    });
-  }
-
   try {
-    log('获取用户信息…');
-    const meResult = await apiCall(`${baseUrl}/api/auth/me`);
-    if (!meResult.success) { log(`请求失败: ${meResult.error}`, 'error'); setProgressActive(false); return; }
+    logToSubmit('获取用户信息…');
+    const meResult = await submitApiCall(currentSubmitCtx, `${baseUrl}/api/auth/me`);
+    if (!meResult?.success) {
+      logToSubmit(`请求失败: ${meResult?.error}`, 'error');
+      setProgressActive(false);
+      submitFlowBusy = false;
+      return;
+    }
     const meData = meResult.data;
-    if (!meData.success) { log(`认证失败: ${meData.message}`, 'error'); setProgressActive(false); return; }
-    const authorId = meData.data.id;
-    log(`用户: ${meData.data.nickname || meData.data.username}`, 'success');
+    if (!meData?.success) {
+      logToSubmit(`认证失败: ${meData?.message}`, 'error');
+      setProgressActive(false);
+      submitFlowBusy = false;
+      return;
+    }
+    currentSubmitCtx.authorId = meData.data.id;
+    logToSubmit(`用户: ${meData.data.nickname || meData.data.username}`, 'success');
 
-    for (let i = 0; i < selected.length; i++) {
-      const item = selected[i];
-      const card = cards[i];
-      log(`\n[${i + 1}/${selected.length}] 处理: ${item.title || '未命名'}…`);
-
-      if (!item.imageUrl) {
-        setCardState(card, 'error', '缺少图片，已跳过');
-        setCardError(card, '该条目缺少图片，已跳过');
-        log('  无图片，跳过', 'error');
-        continue;
-      }
-
-      // Upload
-      setCardState(card, 'running', '上传图片…');
-      log('  上传图片…');
-      const upResult = await uploadImage(item.imageUrl);
-      if (!upResult.success) {
-        setCardState(card, 'error', '上传失败');
-        setCardError(card, upResult.error || '图片上传失败');
-        log(`  上传失败: ${upResult.error}`, 'error');
-        continue;
-      }
-      const assetData = {
-        url: upResult.data.url,
-        mimeType: upResult.data.mimeType,
-        fileSize: upResult.data.fileSize,
-        width: upResult.data.width,
-        height: upResult.data.height,
-        aspectRatio: upResult.data.aspectRatio,
-        fileHash: upResult.data.fileHash,
-      };
-      log('  图片上传成功', 'success');
-
-      // Create
-      setCardState(card, 'running', '创建作品…');
-      log('  创建作品…');
-      const workData = {
-        authorId,
-        title: item.title || `收集作品 ${i + 1}`,
-        summary: item.summary || '',
-        prompt: item.prompt || '',
-        negativePrompt: item.negativePrompt || '',
-        asset: assetData,
-        generation: { model: item.model || '' },
-        customTags: (item.tags || []).slice(0, 8),
-      };
-
-      const createResult = await apiCall(`${baseUrl}/api/works`, 'POST', workData);
-      if (!createResult.success) {
-        setCardState(card, 'error', '创建失败');
-        setCardError(card, createResult.error || '创建作品失败');
-        log(`  创建出错: ${createResult.error}`, 'error');
-        continue;
-      }
-      if (!createResult.data.success) {
-        setCardState(card, 'error', '创建失败');
-        setCardError(card, createResult.data.message || '创建作品失败');
-        log(`  创建失败: ${createResult.data.message}`, 'error');
-        continue;
-      }
-      const createdWork = createResult.data.data;
-      const workId = createdWork.id;
-
-      // Publish
-      setCardState(card, 'running', '发布中…');
-      const pubResult = await apiCall(`${baseUrl}/api/works/${workId}/publish`, 'POST');
-      const publishOk = pubResult?.success && pubResult?.data?.success;
-      const publishedWork = (publishOk && pubResult.data.data) || createdWork;
-
-      if (!publishOk) {
-        // Created but publish failed — still show the work link to the draft.
-        setCardState(card, 'error', '已创建（未发布）');
-        setCardError(card, '作品已创建，但发布失败：' + (pubResult?.error || pubResult?.data?.message || '未知错误'));
-        setCardResult(card, publishedWork, baseUrl);
-        log('  发布失败（草稿已保留）', 'error');
-        continue;
-      }
-
-      setCardState(card, 'done', '已发布');
-      setCardResult(card, publishedWork, baseUrl);
-      successCount++;
-      updateProgress(successCount, selected.length);
-      log('  提交成功!', 'success');
+    for (const task of currentSubmitTasks) {
+      await processSubmitTask(task);
+      updateProgress(countSubmitDone(), currentSubmitTasks.length);
     }
 
     setProgressActive(false);
-    showSubmitFinal(successCount, selected.length);
-    log(`\n${'─'.repeat(28)}`);
-    log(`完成! 成功提交 ${successCount}/${selected.length} 个作品`, 'success');
+    const done = countSubmitDone();
+    const total = currentSubmitTasks.length;
+    logToSubmit(`\n${'─'.repeat(28)}`);
+    logToSubmit(`完成! 成功提交 ${done}/${total} 个作品`, 'success');
+    refreshSubmitFinal();
   } catch (e) {
     setProgressActive(false);
-    log(`流程出错: ${e.message}`, 'error');
-    showSubmitFinal(successCount, selected.length);
+    logToSubmit(`流程出错: ${e.message}`, 'error');
+    refreshSubmitFinal();
+  } finally {
+    submitFlowBusy = false;
   }
 }
 
