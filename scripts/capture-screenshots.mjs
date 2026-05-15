@@ -116,7 +116,7 @@ async function main() {
   await screenshotSidePanel(page, '01-sidepanel-start.png');
 
   page = await openSidePanel(browser, {
-    siteDomain: 'www.qushenma.com',
+    siteDomain: 'www.uyoqu.com',
     siteToken: 'demo-token',
     llmProvider: 'openai',
     llmBaseUrl: 'https://api.openai.com/v1',
@@ -136,7 +136,7 @@ async function main() {
   await page.close();
 
   page = await openSidePanel(browser, {
-    siteDomain: 'www.qushenma.com',
+    siteDomain: 'www.uyoqu.com',
     siteToken: 'demo-token',
     llmProvider: 'openai',
     llmBaseUrl: 'https://api.openai.com/v1',
@@ -170,7 +170,7 @@ async function main() {
   await screenshotSidePanel(page, '04-results.png');
 
   page = await openSidePanel(browser, {
-    siteDomain: 'www.qushenma.com',
+    siteDomain: 'www.uyoqu.com',
     siteToken: 'demo-token',
   });
   await page.evaluate(() => {

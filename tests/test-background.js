@@ -37,7 +37,7 @@ console.log('Test 1: URL Protocol Detection');
     return domain.includes('localhost') ? 'http' : 'https';
   }
 
-  assertEqual(getProtocol('www.qushenma.com'), 'https', 'production uses https');
+  assertEqual(getProtocol('www.uyoqu.com'), 'https', 'production uses https');
   assertEqual(getProtocol('localhost:5173'), 'http', 'localhost uses http');
   assertEqual(getProtocol('localhost:8080'), 'http', 'localhost with port uses http');
 }

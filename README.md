@@ -1,6 +1,6 @@
 # 神马图鉴收集助手 Chrome Extension
 
-一个公开可用的 Chrome Manifest V3 扩展，用侧边栏从网页中收集 AI 图片、提示词、模型和标签，并批量提交到 [趣神马](https://www.qushenma.com/)。
+一个公开可用的 Chrome Manifest V3 扩展，用侧边栏从网页中收集 AI 图片、提示词、模型和标签，并批量提交到 [趣神马](https://www.uyoqu.com/)。
 
 源码位于本仓库；主站仓库通过 Git 子模块引用到 `chrome-extension/`。
 
@@ -28,7 +28,7 @@
 
 ### 趣神马网站
 
-- 默认域名：`www.qushenma.com`
+- 默认域名：`www.uyoqu.com`
 - 授权方式：登录趣神马后，在扩展里点击「获取授权」。
 - 私有部署：把域名改成自己的趣神马部署域名。
 

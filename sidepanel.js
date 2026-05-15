@@ -280,7 +280,7 @@ async function loadSettings() {
     'siteDomain', 'siteToken', 'llmProvider', 'llmBaseUrl', 'llmApiKey', 'llmModel', 'llmThinkingEnabled',
   ]);
   settings = s;
-  siteDomain.value = s.siteDomain || 'www.qushenma.com';
+  siteDomain.value = s.siteDomain || 'www.uyoqu.com';
   siteToken.value = s.siteToken || '';
   llmBaseUrl.value = s.llmBaseUrl || '';
   llmApiKey.value = s.llmApiKey || '';
@@ -325,7 +325,7 @@ async function checkConnection(showResult = false) {
   try {
     const response = await chrome.runtime.sendMessage({
       type: 'TEST_CONNECTION',
-      domain: s.siteDomain || 'www.qushenma.com',
+      domain: s.siteDomain || 'www.uyoqu.com',
       token: s.siteToken,
     });
     if (response?.success) {
@@ -356,7 +356,7 @@ function setConnState(state, text) {
 
 btnLogin.addEventListener('click', async () => {
   const s = await chrome.storage.local.get(['siteDomain']);
-  const domain = s.siteDomain || 'www.qushenma.com';
+  const domain = s.siteDomain || 'www.uyoqu.com';
   const protocol = domain.includes('localhost') ? 'http' : 'https';
   chrome.tabs.create({ url: `${protocol}://${domain}/` });
 });
@@ -366,7 +366,7 @@ btnFetchToken.addEventListener('click', async () => {
   btnFetchToken.textContent = '获取中...';
   try {
     const s = await chrome.storage.local.get(['siteDomain']);
-    const domain = s.siteDomain || 'www.qushenma.com';
+    const domain = s.siteDomain || 'www.uyoqu.com';
     const protocol = domain.includes('localhost') ? 'http' : 'https';
     const tabs = await chrome.tabs.query({ url: `${protocol}://${domain}/*` });
     let token = null;
@@ -1446,7 +1446,7 @@ async function submitSelected() {
   submitCardsEl.innerHTML = '';
   hideSubmitFinal();
 
-  const domain = s.siteDomain || 'www.qushenma.com';
+  const domain = s.siteDomain || 'www.uyoqu.com';
   const protocol = domain.includes('localhost') ? 'http' : 'https';
   const baseUrl = `${protocol}://${domain}`;
 
