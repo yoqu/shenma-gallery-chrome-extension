@@ -98,6 +98,32 @@ window.LLM_PROVIDERS = [
     docsUrl: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys',
   },
   {
+    id: 'minimax-cn',
+    name: 'MiniMax 海螺（国内）',
+    baseUrl: 'https://api.minimax.chat/v1',
+    models: [
+      'MiniMax-VL-01',
+      'MiniMax-Text-01',
+      'abab7-chat-preview',
+      'abab6.5s-chat',
+    ],
+    keyHint: '在 platform.minimaxi.com 国内站「账户管理 → 接口密钥」创建；图文需选 VL 系列',
+    docsUrl: 'https://platform.minimaxi.com/document/Models',
+  },
+  {
+    id: 'minimax-global',
+    name: 'MiniMax 海螺（国际）',
+    baseUrl: 'https://api.minimaxi.chat/v1',
+    models: [
+      'MiniMax-VL-01',
+      'MiniMax-Text-01',
+      'abab7-chat-preview',
+      'abab6.5s-chat',
+    ],
+    keyHint: '在 minimax.io 国际站「Account → API Keys」创建；视觉识别请使用 MiniMax-VL-01',
+    docsUrl: 'https://www.minimax.io/platform/document/Models',
+  },
+  {
     id: 'siliconflow',
     name: '硅基流动 SiliconFlow',
     baseUrl: 'https://api.siliconflow.cn/v1',

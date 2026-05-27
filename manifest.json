@@ -1,18 +1,33 @@
 {
   "manifest_version": 3,
   "name": "神马图鉴收集助手",
-  "version": "1.2.1",
-  "description": "快速收集网页中的AI生成图片和提示词，一键添加到趣神马网站",
+  "version": "1.3.0",
+  "description": "快速收集网页中的AI生成图片和提示词，一键添加到趣神马网站；并支持任意图片 AI 反推中文提示词",
   "permissions": [
     "activeTab",
     "storage",
     "scripting",
     "tabs",
     "sidePanel",
-    "declarativeNetRequest"
+    "declarativeNetRequest",
+    "contextMenus"
   ],
   "host_permissions": [
     "<all_urls>"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-hover.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/icon16.png", "icons/icon48.png"],
+      "matches": ["<all_urls>"]
+    }
   ],
   "action": {
     "default_title": "神马图鉴收集助手",

@@ -48,6 +48,18 @@ const llmApiKeyHint = document.getElementById('llm-api-key-hint');
 const llmModel = document.getElementById('llm-model');
 const llmModelOptions = document.getElementById('llm-model-options');
 const llmThinking = document.getElementById('llm-thinking');
+const profileSelect = document.getElementById('profile-select');
+const profileMeta = document.getElementById('profile-meta');
+const profileName = document.getElementById('profile-name');
+const btnProfileNew = document.getElementById('btn-profile-new');
+const btnProfileDuplicate = document.getElementById('btn-profile-duplicate');
+const btnProfileDelete = document.getElementById('btn-profile-delete');
+const quickProfileSelect = document.getElementById('quick-profile-select');
+const btnFetchModels = document.getElementById('btn-fetch-models');
+const fetchedModelsPanel = document.getElementById('fetched-models');
+const fetchedModelsList = document.getElementById('fetched-models-list');
+const fetchedModelsFilter = document.getElementById('fetched-models-filter');
+const fetchedModelsMeta = document.getElementById('fetched-models-meta');
 
 const editModal = document.getElementById('edit-modal');
 const lightbox = document.getElementById('lightbox');
@@ -68,6 +80,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   await checkConnection();
   showStep('idle');
   refreshSiteAdapterBanner();
+  bindRecognizeUi();
+  checkPendingRecognizeTask();
 });
 
 // Track current active tab so the site-adapter banner stays accurate as the
@@ -99,7 +113,6 @@ async function refreshSiteAdapterBanner() {
     banner.classList.add('hidden');
   }
 }
-
 // React to settings changing in another window/instance.
 chrome.storage.onChanged?.addListener((changes, area) => {
   if (area !== 'local') return;
@@ -259,6 +272,131 @@ function buildThinkingConfig(llm) {
   };
 }
 
+// ============ Fetched models (live /models) ============
+let fetchedModels = []; // [{ id, isVision }]
+
+function looksLikeVisionId(id) {
+  return /(vision|vl|multimodal|image|4o|4\.1|seed-1-6|seed1-6|glm-4v|glm-4\.5v|doubao.*vision|qwen-?vl|qwen2\.5-?vl|gemini-.*pro-vision|gemini-1\.5|gemini-2|claude-3|claude-3\.5|claude-4|minimax-vl)/i.test(id);
+}
+
+function highlightCurrentChip() {
+  if (!fetchedModelsList) return;
+  const current = llmModel.value.trim();
+  fetchedModelsList.querySelectorAll('.fetched-model-chip').forEach((chip) => {
+    chip.dataset.active = (chip.dataset.id === current) ? 'true' : 'false';
+  });
+}
+
+function renderFetchedModels(filterText = '') {
+  if (!fetchedModelsList) return;
+  const q = String(filterText || '').trim().toLowerCase();
+  const list = q ? fetchedModels.filter((m) => m.id.toLowerCase().includes(q)) : fetchedModels;
+
+  if (fetchedModelsMeta) {
+    fetchedModelsMeta.textContent = `${list.length} / ${fetchedModels.length}`;
+  }
+
+  if (!list.length) {
+    fetchedModelsList.innerHTML = '<div class="fetched-models-empty">没有匹配的模型</div>';
+    return;
+  }
+
+  // Vision-capable first, then alphabetical.
+  list.sort((a, b) => {
+    if (a.isVision !== b.isVision) return a.isVision ? -1 : 1;
+    return a.id.localeCompare(b.id);
+  });
+
+  fetchedModelsList.innerHTML = '';
+  list.forEach((m) => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'fetched-model-chip';
+    chip.dataset.id = m.id;
+    chip.title = m.id;
+    chip.innerHTML = m.isVision
+      ? `<span class="__id">${esc(m.id)}</span><span class="__tag">VISION</span>`
+      : `<span class="__id">${esc(m.id)}</span>`;
+    chip.addEventListener('click', () => {
+      llmModel.value = m.id;
+      highlightCurrentChip();
+      llmModel.dispatchEvent(new Event('input'));
+    });
+    fetchedModelsList.appendChild(chip);
+  });
+  highlightCurrentChip();
+}
+
+async function fetchModelList() {
+  const baseUrl = llmBaseUrl.value.trim().replace(/\/+$/, '');
+  const apiKey = llmApiKey.value.trim();
+  if (!baseUrl || !apiKey) {
+    showToast('请先填写 Base URL 与 API Key', 'error');
+    return;
+  }
+  btnFetchModels.disabled = true;
+  const original = btnFetchModels.textContent;
+  btnFetchModels.textContent = '拉取中…';
+  try {
+    const resp = await fetch(`${baseUrl}/models`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+      },
+    });
+    if (!resp.ok) {
+      let detail = `${resp.status}`;
+      try { const t = await resp.text(); if (t) detail += ` · ${t.slice(0, 200)}`; } catch {}
+      throw new Error(detail);
+    }
+    const data = await resp.json();
+    const items = extractModelIds(data);
+    if (!items.length) throw new Error('返回不含 model id');
+
+    fetchedModels = items.map((id) => ({ id, isVision: looksLikeVisionId(id) }));
+    fetchedModelsPanel?.classList.remove('hidden');
+    renderFetchedModels(fetchedModelsFilter?.value || '');
+
+    // Sync into datalist so the input also auto-completes.
+    if (llmModelOptions) {
+      llmModelOptions.innerHTML = '';
+      fetchedModels.forEach((m) => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        if (m.isVision) opt.label = 'vision';
+        llmModelOptions.appendChild(opt);
+      });
+    }
+
+    showToast(`拉到 ${fetchedModels.length} 个模型`, 'success');
+    debugLog('拉取模型列表成功', { count: fetchedModels.length, baseUrl });
+  } catch (e) {
+    debugLog('拉取模型列表失败', { message: e.message, baseUrl }, 'error');
+    showToast(`拉取失败: ${e.message}`, 'error');
+  } finally {
+    btnFetchModels.disabled = false;
+    btnFetchModels.textContent = original;
+  }
+}
+
+function extractModelIds(data) {
+  if (!data) return [];
+  const candidates = [];
+  if (Array.isArray(data)) candidates.push(...data);
+  if (Array.isArray(data.data)) candidates.push(...data.data);
+  if (Array.isArray(data.models)) candidates.push(...data.models);
+  if (Array.isArray(data.result?.models)) candidates.push(...data.result.models);
+  if (!candidates.length) return [];
+  const ids = candidates
+    .map((m) => (typeof m === 'string' ? m : (m?.id || m?.model || m?.name || '')))
+    .filter((id) => typeof id === 'string' && id.trim().length > 0);
+  return Array.from(new Set(ids));
+}
+
+btnFetchModels?.addEventListener('click', fetchModelList);
+fetchedModelsFilter?.addEventListener('input', () => renderFetchedModels(fetchedModelsFilter.value));
+llmModel?.addEventListener('input', highlightCurrentChip);
+
 // force=true overwrites existing fields (user picked from dropdown);
 // force=false only fills empty fields (called when restoring saved settings).
 function applyProviderPreset(providerId, { force = false } = {}) {
@@ -274,37 +412,261 @@ function applyProviderPreset(providerId, { force = false } = {}) {
   }
 }
 
-// ============ Settings persistence ============
-async function loadSettings() {
-  const s = await chrome.storage.local.get([
-    'siteDomain', 'siteToken', 'llmProvider', 'llmBaseUrl', 'llmApiKey', 'llmModel', 'llmThinkingEnabled',
-  ]);
-  settings = s;
-  siteDomain.value = s.siteDomain || 'www.uyoqu.com';
-  siteToken.value = s.siteToken || '';
-  llmBaseUrl.value = s.llmBaseUrl || '';
-  llmApiKey.value = s.llmApiKey || '';
-  llmModel.value = s.llmModel || '';
-  if (llmThinking) llmThinking.checked = Boolean(s.llmThinkingEnabled);
+// ============ LLM profiles ============
+// Profiles let the user keep multiple provider configs side-by-side and pick
+// the active one. The currently active profile is mirrored into the legacy
+// `llm*` storage keys so all downstream readers (callAI, recognize, etc.)
+// keep working without changes.
+const PROFILES_KEY = 'llmProfiles';
+const ACTIVE_PROFILE_KEY = 'llmActiveProfileId';
+let llmProfiles = [];
+let activeProfileId = '';
 
-  const resolvedId = s.llmProvider || inferProviderId(llmBaseUrl.value);
-  if (resolvedId && llmProvider) {
-    llmProvider.value = resolvedId;
-    applyProviderPreset(resolvedId, { force: false });
+function newProfileId() {
+  return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function defaultProfileName(profile) {
+  if (profile?.providerId) {
+    const preset = findProvider(profile.providerId);
+    if (preset?.name) return preset.name;
+  }
+  if (profile?.baseUrl) {
+    try { return new URL(profile.baseUrl).hostname; } catch { return profile.baseUrl; }
+  }
+  return '新建配置';
+}
+
+function snapshotFormToProfile() {
+  return {
+    name: profileName?.value.trim() || '',
+    providerId: llmProvider?.value || '',
+    baseUrl: llmBaseUrl.value.trim(),
+    apiKey: llmApiKey.value.trim(),
+    model: llmModel.value.trim(),
+    thinking: Boolean(llmThinking && llmThinking.checked),
+  };
+}
+
+function activeProfile() {
+  return llmProfiles.find((p) => p.id === activeProfileId) || null;
+}
+
+async function persistProfiles({ mirror = true } = {}) {
+  const data = {
+    [PROFILES_KEY]: llmProfiles,
+    [ACTIVE_PROFILE_KEY]: activeProfileId,
+  };
+  if (mirror) {
+    const ap = activeProfile();
+    Object.assign(data, {
+      llmProvider: ap?.providerId || '',
+      llmBaseUrl: ap?.baseUrl || '',
+      llmApiKey: ap?.apiKey || '',
+      llmModel: ap?.model || '',
+      llmThinkingEnabled: Boolean(ap?.thinking),
+    });
+  }
+  await chrome.storage.local.set(data);
+}
+
+function loadProfileIntoForm(profile) {
+  if (!profile) {
+    profileName.value = '';
+    llmBaseUrl.value = '';
+    llmApiKey.value = '';
+    llmModel.value = '';
+    if (llmProvider) llmProvider.value = '';
+    if (llmThinking) llmThinking.checked = false;
+    return;
+  }
+  profileName.value = profile.name || '';
+  llmBaseUrl.value = profile.baseUrl || '';
+  llmApiKey.value = profile.apiKey || '';
+  llmModel.value = profile.model || '';
+  if (llmThinking) llmThinking.checked = Boolean(profile.thinking);
+
+  const resolvedId = profile.providerId || inferProviderId(profile.baseUrl || '');
+  if (llmProvider) {
+    llmProvider.value = resolvedId || '';
+    if (resolvedId) applyProviderPreset(resolvedId, { force: false });
+  }
+  // Wipe fetched-models panel; user can re-pull for the new profile.
+  fetchedModels = [];
+  fetchedModelsPanel?.classList.add('hidden');
+  if (fetchedModelsList) fetchedModelsList.innerHTML = '';
+  if (fetchedModelsMeta) fetchedModelsMeta.textContent = '';
+  if (fetchedModelsFilter) fetchedModelsFilter.value = '';
+}
+
+function renderProfileSelectors() {
+  // Both the drawer dropdown and the status-bar quick switcher.
+  const fill = (sel) => {
+    if (!sel) return;
+    sel.innerHTML = '';
+    llmProfiles.forEach((p) => {
+      const opt = document.createElement('option');
+      opt.value = p.id;
+      opt.textContent = p.name || defaultProfileName(p);
+      sel.appendChild(opt);
+    });
+    sel.value = activeProfileId;
+  };
+  fill(profileSelect);
+  fill(quickProfileSelect);
+
+  if (quickProfileSelect) {
+    quickProfileSelect.classList.toggle('hidden', llmProfiles.length < 2);
+  }
+
+  if (profileMeta) {
+    profileMeta.textContent = `${llmProfiles.length} 个档案 · 当前 ${activeProfile()?.name || '（未命名）'}`;
+  }
+  if (btnProfileDelete) {
+    btnProfileDelete.disabled = llmProfiles.length <= 1;
   }
 }
 
+async function migrateLegacyProfile() {
+  const s = await chrome.storage.local.get([
+    'llmProvider', 'llmBaseUrl', 'llmApiKey', 'llmModel', 'llmThinkingEnabled',
+  ]);
+  if (s.llmBaseUrl || s.llmApiKey || s.llmModel || s.llmProvider) {
+    const provider = findProvider(s.llmProvider || '') || findProvider(inferProviderId(s.llmBaseUrl || ''));
+    const profile = {
+      id: newProfileId(),
+      name: provider?.name || (s.llmBaseUrl ? new URL(s.llmBaseUrl).hostname : '默认配置'),
+      providerId: s.llmProvider || '',
+      baseUrl: s.llmBaseUrl || '',
+      apiKey: s.llmApiKey || '',
+      model: s.llmModel || '',
+      thinking: Boolean(s.llmThinkingEnabled),
+    };
+    llmProfiles = [profile];
+    activeProfileId = profile.id;
+  } else {
+    // First-run: create one empty default profile.
+    const profile = { id: newProfileId(), name: '默认配置', providerId: '', baseUrl: '', apiKey: '', model: '', thinking: false };
+    llmProfiles = [profile];
+    activeProfileId = profile.id;
+  }
+  await persistProfiles();
+}
+
+async function loadProfiles() {
+  const s = await chrome.storage.local.get([PROFILES_KEY, ACTIVE_PROFILE_KEY]);
+  if (Array.isArray(s[PROFILES_KEY]) && s[PROFILES_KEY].length) {
+    llmProfiles = s[PROFILES_KEY].map((p) => ({
+      id: p.id || newProfileId(),
+      name: p.name || defaultProfileName(p),
+      providerId: p.providerId || '',
+      baseUrl: p.baseUrl || '',
+      apiKey: p.apiKey || '',
+      model: p.model || '',
+      thinking: Boolean(p.thinking),
+    }));
+    activeProfileId = llmProfiles.some((p) => p.id === s[ACTIVE_PROFILE_KEY])
+      ? s[ACTIVE_PROFILE_KEY]
+      : llmProfiles[0].id;
+  } else {
+    await migrateLegacyProfile();
+  }
+}
+
+async function switchActiveProfile(id, { fromUi = true } = {}) {
+  if (!llmProfiles.some((p) => p.id === id)) return;
+  // Persist whatever is currently in the form into the old active profile
+  // before switching (don't lose in-progress edits).
+  if (fromUi && activeProfileId) {
+    const prev = activeProfile();
+    if (prev) Object.assign(prev, snapshotFormToProfile());
+  }
+  activeProfileId = id;
+  loadProfileIntoForm(activeProfile());
+  renderProfileSelectors();
+  await persistProfiles();
+  if (fromUi) {
+    showToast(`已切换：${activeProfile()?.name || ''}`, 'info');
+  }
+}
+
+profileSelect?.addEventListener('change', () => switchActiveProfile(profileSelect.value));
+quickProfileSelect?.addEventListener('change', () => switchActiveProfile(quickProfileSelect.value));
+
+btnProfileNew?.addEventListener('click', async () => {
+  // Save in-progress edits to current profile first.
+  const cur = activeProfile();
+  if (cur) Object.assign(cur, snapshotFormToProfile());
+  const profile = {
+    id: newProfileId(),
+    name: `新建配置 ${llmProfiles.length + 1}`,
+    providerId: '', baseUrl: '', apiKey: '', model: '', thinking: false,
+  };
+  llmProfiles.push(profile);
+  activeProfileId = profile.id;
+  loadProfileIntoForm(profile);
+  renderProfileSelectors();
+  await persistProfiles();
+  profileName?.focus();
+});
+
+btnProfileDuplicate?.addEventListener('click', async () => {
+  const cur = activeProfile();
+  if (cur) Object.assign(cur, snapshotFormToProfile());
+  const src = activeProfile();
+  if (!src) return;
+  const copy = {
+    ...src,
+    id: newProfileId(),
+    name: `${src.name || defaultProfileName(src)} 副本`,
+  };
+  llmProfiles.push(copy);
+  activeProfileId = copy.id;
+  loadProfileIntoForm(copy);
+  renderProfileSelectors();
+  await persistProfiles();
+});
+
+btnProfileDelete?.addEventListener('click', async () => {
+  if (llmProfiles.length <= 1) {
+    showToast('至少保留一个档案', 'error');
+    return;
+  }
+  const cur = activeProfile();
+  if (!cur) return;
+  if (!confirm(`确定删除档案「${cur.name || ''}」？此操作不可恢复。`)) return;
+  llmProfiles = llmProfiles.filter((p) => p.id !== cur.id);
+  activeProfileId = llmProfiles[0].id;
+  loadProfileIntoForm(activeProfile());
+  renderProfileSelectors();
+  await persistProfiles();
+  showToast('档案已删除', 'success');
+});
+
+// ============ Settings persistence ============
+async function loadSettings() {
+  await loadProfiles();
+  const s = await chrome.storage.local.get(['siteDomain', 'siteToken']);
+  settings = s;
+  siteDomain.value = s.siteDomain || 'www.uyoqu.com';
+  siteToken.value = s.siteToken || '';
+  loadProfileIntoForm(activeProfile());
+  renderProfileSelectors();
+  // Mirror active profile into legacy keys so downstream readers see it.
+  await persistProfiles();
+}
+
 btnSaveSettings.addEventListener('click', async () => {
+  // Snapshot the form into the active profile.
+  const cur = activeProfile();
+  if (cur) Object.assign(cur, snapshotFormToProfile());
+
   await chrome.storage.local.set({
     siteDomain: siteDomain.value.trim(),
     siteToken: siteToken.value.trim(),
-    llmProvider: llmProvider ? llmProvider.value : '',
-    llmBaseUrl: llmBaseUrl.value.trim(),
-    llmApiKey: llmApiKey.value.trim(),
-    llmModel: llmModel.value.trim(),
-    llmThinkingEnabled: Boolean(llmThinking && llmThinking.checked),
   });
-  await loadSettings();
+  await persistProfiles();
+  renderProfileSelectors();
   showToast('设置已保存', 'success');
   checkConnection();
 });
@@ -461,10 +823,22 @@ async function cancelPicking() {
   showStep('idle');
 }
 
-// Picker → side panel: incoming messages.
+// Picker / background → side panel: incoming messages.
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || typeof msg.type !== 'string') return;
-  // Only accept messages from the tab we're picking in.
+
+  // Reverse-prompt dispatch (from background worker — has no sender.tab when
+  // coming from the service worker). Handle before the pickingTabId guard.
+  if (msg.type === 'REVERSE_PROMPT_DISPATCH') {
+    const payload = msg.payload || {};
+    // Consume the persisted fallback so DOMContentLoaded doesn't re-fire it.
+    chrome.storage.local.remove(PENDING_RECOGNIZE_KEY).catch?.(() => {});
+    startRecognizeTask(payload);
+    sendResponse({ ok: true });
+    return;
+  }
+
+  // Only accept picker messages from the tab we're picking in.
   if (pickingTabId != null && sender.tab && sender.tab.id !== pickingTabId) return;
 
   if (msg.type === 'PICKER_DEBUG') {
@@ -1530,4 +1904,407 @@ function showToast(message, type = 'info') {
   toast.textContent = message;
   document.body.appendChild(toast);
   setTimeout(() => toast.remove(), 3000);
+}
+
+// ============ Reverse-prompt recognition ============
+// The "AI 反推中文提示词" flow. Reached three ways:
+//   1) In-page hover button on any image → background dispatch
+//   2) Right-click "AI 反推中文提示词" context menu → background dispatch
+//   3) Manual URL field on the idle step
+//
+// On dispatch we open the recognize step, fetch the image bytes through the
+// background worker (handles CORS), send it to the configured vision LLM
+// with the fixed "反推中文提示词" prompt, then render the result.
+
+const PENDING_RECOGNIZE_KEY = 'shenmaPendingReverseTask';
+let recognizeAbortController = null;
+let recognizeCurrent = null; // last successful task (for retry)
+
+const REVERSE_SYSTEM_PROMPT = `你是一名资深 AI 图片提示词反推专家、视觉设计师、商业海报设计师和短视频封面设计师。请根据用户上传的图片，反推出一套可用于即梦、可灵、豆包、通义万相、Midjourney、Stable Diffusion、SDXL、DALL·E 等 AI 绘图工具的高质量中文图片生成提示词。
+
+你的任务不是简单描述图片，而是从"如何复现这张图"的角度，系统分析图片的视觉结构，并生成可直接用于 AI 绘图的中文提示词。
+
+请注意：最终只需要输出中文内容，不要输出英文提示词。
+
+请使用 Markdown 二级标题（##）按以下顺序与结构完整输出，不要省略任何一节：
+
+## 一、图片核心概念
+用 1-2 句话总结主题、用途和视觉风格。需说明：
+- 适用场景（视频封面 / 商业海报 / 产品广告 / 人物写真 / 社交媒体配图 / 课程封面 / 公众号头图 等）
+- 整体视觉风格（科技感 / 赛博朋克 / 写实摄影 / 3D 渲染 / 漫画风 / 商业大片感 / 极简风 / 复古风 / 知识类短视频封面 等）
+
+## 二、画面元素拆解
+按下列编号小节逐项拆解，每一节都要有内容、避免空泛：
+1. 主体元素：画面中最重要的人物、物体、产品、角色或符号
+2. 背景环境：发生在哪个场景，背景关键细节
+3. 构图方式：横版/竖版、主体位置、前中后景关系、视觉重心、是否使用对角线/中心/左右分割/三分法构图
+4. 色彩风格：主色调、辅助色、对比色、饱和度、明暗、是否使用霓虹色/渐变/高对比/暗色背景
+5. 光影氛围：自然光/棚拍光/霓虹光/电影光/柔光/硬光，高光/阴影/边缘光/发光效果，整体氛围（明亮/暗调/紧张/梦幻/科技感/高级感）
+6. 视觉风格：真实摄影 / 摄影合成 / 3D 渲染 / 扁平插画 / 卡通漫画 / 科技海报 / 短视频封面 / 电商广告 / 游戏海报 / 电影海报 等
+7. 文字排版：如有文字，识别文字内容、字体风格、字号、颜色、描边、阴影、立体效果、倾斜、排版位置、主副标题层级关系；若 AI 绘图工具不擅长生成准确文字，请明确提醒"文字建议后期用 Photoshop、Canva、Figma、剪映或其他设计工具单独添加"
+8. 装饰元素：线条 / 箭头 / 边框 / 图标 / 光效 / 贴纸 / 几何图形 / 纹理 / 渐变块 / 漫画气泡 / 科技 HUD 元素
+9. 情绪氛围：紧张 / 专业 / 搞笑 / 震撼 / 高级 / 可爱 / 神秘 / 科技感 / 压迫感 / 商业感 / 互联网感
+
+## 三、中文完整版提示词
+一段可直接复制到 AI 绘图工具的中文提示词，要求：
+- 具体、完整、可复现
+- 顺序：画面主体 + 场景背景 + 构图方式 + 视觉风格 + 光影氛围 + 色彩方案 + 细节元素 + 画质关键词
+- 若图片有文字，单独写明文字内容及其字体风格、颜色、描边、阴影、排版位置
+- 不要输出英文版提示词
+
+## 四、中文精简版提示词
+更短、更适合快速复制使用的一段中文提示词：
+- 保留最关键的视觉信息
+- 控制在一段话内
+- 适合快速生成相似风格图片
+- 不要包含英文描述
+
+## 五、中文负面提示词
+中文 negative prompt，用于避免低质量结果。可包含：低质量、模糊、画面变形、构图混乱、文字错误、文字不可读、错别字、多余手指、人体变形、脸部扭曲、水印、Logo、过曝、颜色暗淡、排版糟糕、背景杂乱、低清晰度、噪点严重、重复物体、主体不明确、光影混乱 等；如图片风格有特殊禁忌请补充。
+
+## 六、推荐生成参数
+### Midjourney 参数
+- 画幅比例（--ar 16:9 / 1:1 / 9:16 / 4:5 等）
+- 风格化参数 --stylize 数值建议
+- 版本参数 --v 6 或其他合适版本
+- 是否适合 --style raw
+
+### Stable Diffusion / SDXL 参数
+- 模型类型建议
+- Steps 建议范围
+- CFG Scale 建议范围
+- Sampler 建议
+- 分辨率建议
+- 是否适合 ControlNet / IP-Adapter / Reference Image 等参考图功能
+
+## 七、可替换关键词
+严格按下列格式列出（每项一行）：
+- 主体可以替换为：…
+- 背景可以替换为：…
+- 颜色可以替换为：…
+- 风格可以替换为：…
+- 文字标题可以替换为：…
+- 装饰元素可以替换为：…
+- 情绪氛围可以替换为：…
+
+【输出规范】
+- 全程只使用中文，不输出英文提示词
+- 使用清晰的 Markdown 小标题（## / ###）
+- 避免空泛描述，像专业提示词工程师一样输出
+- 不省略任何一节
+- 不返回额外的开场白或结束语，直接从「## 一、图片核心概念」开始`;
+
+const REVERSE_USER_TEXT = '请按照上述结构反推这张图片对应的中文绘画提示词，所有节都要完整输出。';
+
+const recognizeDom = {
+  step: () => document.querySelector('.step-recognize'),
+  preview: () => document.getElementById('recognize-preview'),
+  previewImg: () => document.getElementById('recognize-preview-img'),
+  source: () => document.getElementById('recognize-source'),
+  loading: () => document.getElementById('recognize-loading'),
+  status: () => document.getElementById('recognize-status'),
+  steps: () => document.getElementById('recognize-steps'),
+  result: () => document.getElementById('recognize-result'),
+  resultText: () => document.getElementById('recognize-result-text'),
+  resultMeta: () => document.getElementById('recognize-result-meta'),
+  error: () => document.getElementById('recognize-error'),
+  bottomActions: () => document.getElementById('recognize-bottom-actions'),
+};
+
+function bindRecognizeUi() {
+  document.getElementById('btn-recognize-close')?.addEventListener('click', leaveRecognizeStep);
+  document.getElementById('btn-recognize-cancel')?.addEventListener('click', cancelRecognize);
+  document.getElementById('btn-recognize-copy')?.addEventListener('click', copyRecognizeResult);
+  document.getElementById('btn-recognize-retry')?.addEventListener('click', () => {
+    if (recognizeCurrent) startRecognizeTask(recognizeCurrent, { retry: true });
+  });
+  document.getElementById('btn-recognize-manual')?.addEventListener('click', () => {
+    const url = String(document.getElementById('recognize-manual-url')?.value || '').trim();
+    if (!url) {
+      showToast('请输入图片 URL', 'error');
+      return;
+    }
+    startRecognizeTask({ imageUrl: url, source: 'manual' });
+  });
+  document.getElementById('recognize-manual-url')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('btn-recognize-manual')?.click();
+  });
+  document.getElementById('recognize-preview')?.addEventListener('click', () => {
+    const url = recognizeCurrent?.imageUrl;
+    if (url) showLightbox(url);
+  });
+}
+
+async function checkPendingRecognizeTask() {
+  try {
+    const s = await chrome.storage.local.get([PENDING_RECOGNIZE_KEY]);
+    const payload = s?.[PENDING_RECOGNIZE_KEY];
+    if (!payload || !payload.imageUrl) return;
+    // Only consume tasks dispatched in the last 30 seconds so stale ones
+    // don't auto-fire on every panel open.
+    if (Date.now() - (payload.createdAt || 0) > 30_000) {
+      await chrome.storage.local.remove(PENDING_RECOGNIZE_KEY);
+      return;
+    }
+    await chrome.storage.local.remove(PENDING_RECOGNIZE_KEY);
+    startRecognizeTask(payload);
+  } catch {}
+}
+
+function leaveRecognizeStep() {
+  cancelRecognize({ silent: true });
+  showStep('idle');
+}
+
+function cancelRecognize({ silent = false } = {}) {
+  if (recognizeAbortController) {
+    try { recognizeAbortController.abort(); } catch {}
+    recognizeAbortController = null;
+  }
+  if (!silent) {
+    setRecognizeStatus('已取消');
+    markRecognizeStep('ai', 'error');
+  }
+}
+
+function setRecognizeStatus(text) {
+  const el = recognizeDom.status();
+  if (el) el.textContent = text || '';
+}
+
+function resetRecognizeSteps() {
+  const list = recognizeDom.steps();
+  if (!list) return;
+  list.querySelectorAll('li').forEach((li) => li.removeAttribute('data-state'));
+}
+
+function markRecognizeStep(stage, state) {
+  const list = recognizeDom.steps();
+  if (!list) return;
+  const li = list.querySelector(`li[data-stage="${stage}"]`);
+  if (li) li.setAttribute('data-state', state);
+}
+
+function setRecognizeView(view) {
+  // view: 'loading' | 'result' | 'error'
+  recognizeDom.loading()?.classList.toggle('hidden', view !== 'loading');
+  recognizeDom.result()?.classList.toggle('hidden', view !== 'result');
+  recognizeDom.error()?.classList.toggle('hidden', view !== 'error');
+  const bottom = recognizeDom.bottomActions();
+  if (bottom) bottom.style.display = view === 'loading' ? '' : 'none';
+}
+
+function showRecognizeError(message) {
+  const el = recognizeDom.error();
+  if (el) el.textContent = message || '识别失败';
+  setRecognizeView('error');
+  setRecognizeStatus('识别失败');
+}
+
+function showRecognizePreview(url) {
+  const wrap = recognizeDom.preview();
+  const img = recognizeDom.previewImg();
+  const src = recognizeDom.source();
+  if (!wrap || !img) return;
+  if (url) {
+    img.src = url;
+    img.style.display = 'block';
+    wrap.classList.add('has-img');
+  } else {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+    wrap.classList.remove('has-img');
+  }
+  if (src) src.textContent = url || '';
+}
+
+async function startRecognizeTask(payload, { retry = false } = {}) {
+  const imageUrl = String(payload?.imageUrl || '').trim();
+  if (!imageUrl) {
+    showToast('图片 URL 为空', 'error');
+    return;
+  }
+  recognizeCurrent = { ...payload, imageUrl };
+
+  // Cancel any previous in-flight recognition.
+  if (recognizeAbortController) {
+    try { recognizeAbortController.abort(); } catch {}
+    recognizeAbortController = null;
+  }
+
+  showStep('recognize');
+  setRecognizeView('loading');
+  resetRecognizeSteps();
+  showRecognizePreview(imageUrl);
+  setRecognizeStatus(retry ? '重新反推中…' : '正在准备…');
+
+  // Validate LLM settings up-front.
+  const llm = await chrome.storage.local.get(['llmProvider', 'llmBaseUrl', 'llmApiKey', 'llmModel', 'llmThinkingEnabled']);
+  if (!llm.llmBaseUrl || !llm.llmApiKey || !llm.llmModel) {
+    showRecognizeError('请先在「设置」中配置 AI 大模型（Base URL / API Key / 模型）；反推图片需要支持视觉识别的模型。');
+    drawer.classList.add('open');
+    return;
+  }
+  if (looksLikeTextOnlyModel(llm)) {
+    debugLog('模型能力拦截', {
+      baseUrl: llm.llmBaseUrl,
+      model: llm.llmModel,
+      hint: '当前模型为纯文本模型，无法识图',
+    }, 'error');
+    showRecognizeError(
+      `当前模型「${llm.llmModel}」似乎不支持视觉识别（DeepSeek / Reasoner / 纯 Chat 接口）。\n请到「设置」切换到视觉模型，例如：\n• 豆包 doubao-1-5-vision-pro-32k-250115\n• 通义 qwen-vl-max-latest\n• 智谱 glm-4v-plus\n• Kimi moonshot-v1-32k-vision-preview\n• OpenAI gpt-4o / gpt-4o-mini`
+    );
+    drawer.classList.add('open');
+    return;
+  }
+
+  recognizeAbortController = new AbortController();
+  const signal = recognizeAbortController.signal;
+
+  try {
+    // ─── Stage 1: fetch image via background (CORS-safe) ───
+    markRecognizeStep('fetch', 'active');
+    setRecognizeStatus('正在下载图片…');
+    debugLog('反推：开始下载图片', { imageUrl });
+    const fetchResp = await chrome.runtime.sendMessage({
+      type: 'FETCH_IMAGE_DATA_URL',
+      imageUrl,
+    });
+    if (signal.aborted) return;
+    if (!fetchResp?.success) {
+      throw new Error(fetchResp?.error || '获取图片失败');
+    }
+    markRecognizeStep('fetch', 'done');
+
+    // ─── Stage 2: encode ───
+    markRecognizeStep('encode', 'active');
+    setRecognizeStatus('正在编码为 Base64…');
+    const dataUrl = fetchResp.dataUrl;
+    const sizeKB = fetchResp.size ? Math.round(fetchResp.size / 1024) : 0;
+    if (signal.aborted) return;
+    markRecognizeStep('encode', 'done');
+
+    // ─── Stage 3: vision LLM ───
+    markRecognizeStep('ai', 'active');
+    setRecognizeStatus(`正在请求 ${llm.llmModel}…`);
+    debugLog('反推：发送 AI 请求', {
+      baseUrl: llm.llmBaseUrl,
+      model: llm.llmModel,
+      sizeKB,
+    });
+
+    const resp = await fetch(`${llm.llmBaseUrl.replace(/\/+$/, '')}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${llm.llmApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      signal,
+      body: JSON.stringify({
+        model: llm.llmModel,
+        messages: [
+          { role: 'system', content: REVERSE_SYSTEM_PROMPT },
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: REVERSE_USER_TEXT },
+              { type: 'image_url', image_url: { url: dataUrl } },
+            ],
+          },
+        ],
+        temperature: 0.35,
+        max_tokens: 4096,
+        ...(buildThinkingConfig(llm) || {}),
+      }),
+    });
+
+    if (signal.aborted) return;
+    if (!resp.ok) {
+      let errText = `AI 接口返回 ${resp.status}`;
+      try {
+        const body = await resp.text();
+        if (body) errText += ` · ${body.slice(0, 240)}`;
+      } catch {}
+      throw new Error(errText);
+    }
+    markRecognizeStep('ai', 'done');
+
+    // ─── Stage 4: format ───
+    markRecognizeStep('format', 'active');
+    setRecognizeStatus('正在整理提示词…');
+    const data = await resp.json();
+    if (signal.aborted) return;
+    const content = data?.choices?.[0]?.message?.content;
+    const text = extractRecognizedText(content);
+    if (!text) throw new Error('AI 返回为空');
+    markRecognizeStep('format', 'done');
+
+    // ─── Done ───
+    const usage = data?.usage || {};
+    const meta = usage.total_tokens
+      ? `${llm.llmModel} · ${usage.total_tokens} tokens${sizeKB ? ` · 图片 ${sizeKB}KB` : ''}`
+      : `${llm.llmModel}${sizeKB ? ` · 图片 ${sizeKB}KB` : ''}`;
+    showRecognizeResult(text, meta);
+    debugLog('反推：识别成功', { length: text.length, usage }, 'success');
+  } catch (e) {
+    if (e?.name === 'AbortError' || signal.aborted) {
+      debugLog('反推：已取消', {}, 'warn');
+      // user-initiated cancel — leave the UI as the cancel handler set it
+      return;
+    }
+    debugLog('反推：识别失败', { message: e.message }, 'error');
+    // Mark the currently-active stage as error so the user can see where it broke.
+    const list = recognizeDom.steps();
+    const active = list?.querySelector('li[data-state="active"]');
+    if (active) active.setAttribute('data-state', 'error');
+    showRecognizeError(`识别失败：${e.message || e}`);
+  } finally {
+    if (recognizeAbortController && recognizeAbortController.signal === signal) {
+      recognizeAbortController = null;
+    }
+  }
+}
+
+function extractRecognizedText(content) {
+  if (!content) return '';
+  if (typeof content === 'string') return content.trim();
+  // Some providers return content as an array of parts.
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => (typeof part === 'string' ? part : part?.text || ''))
+      .join('\n')
+      .trim();
+  }
+  return String(content).trim();
+}
+
+function showRecognizeResult(text, meta) {
+  const ta = recognizeDom.resultText();
+  if (ta) ta.value = text;
+  const m = recognizeDom.resultMeta();
+  if (m) m.textContent = meta || '';
+  setRecognizeView('result');
+  setRecognizeStatus('完成');
+}
+
+async function copyRecognizeResult() {
+  const ta = recognizeDom.resultText();
+  const text = ta?.value || '';
+  if (!text) {
+    showToast('当前没有可复制的内容', 'error');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('提示词已复制', 'success');
+  } catch (e) {
+    // Fallback for older browsers.
+    try {
+      ta.select();
+      document.execCommand('copy');
+      showToast('提示词已复制', 'success');
+    } catch {
+      showToast('复制失败，请手动选择文本', 'error');
+    }
+  }
 }
